@@ -34,6 +34,25 @@ module Expr =
     *)
     let update x v s = fun y -> if x = y then v else s y
 
+    let intToBool i = i <> 0
+    let boolToInt b = if b then 1 else 0
+
+    let binopEval op a b = match op with
+	| "+"  -> a + b
+	| "-"  -> a - b
+	| "*"  -> a * b
+	| "/"  -> a / b
+	| "%"  -> a mod b
+	| "==" -> boolToInt (a == b)
+	| "!=" -> boolToInt (a != b)
+	| "<=" -> boolToInt (a <= b)
+	| "<"  -> boolToInt (a < b)
+	| ">=" -> boolToInt (a >= b)
+	| ">"  -> boolToInt (a > b)
+	| "!!" -> boolToInt ((intToBool a) || (intToBool b))
+	| "&&" -> boolToInt ((intToBool a) && (intToBool b))
+	| _    -> failwith  (Printf.sprintf "Unknown operation %s" op)
+
     (* Expression evaluator
 
           val eval : state -> t -> int
@@ -41,7 +60,10 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval s e = match e with
+	| Const x -> x
+	| Var v -> s v
+	| Binop (op, e1, e2) -> binopEval op (eval s e1) (eval s e2)
 
   end
                     
@@ -65,7 +87,14 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval (s, i, o) stmt = match stmt with
+        | Assign (x, e)      -> (Expr.update x (Expr.eval s e) s, i, o)
+        | Read x             -> (match i with 
+                                    | z::tail -> Expr.update x z s, tail, o
+                                    | [] -> failwith "Empty input"
+                                )
+        | Write e            -> (s, i, o @ [Expr.eval s e])
+        | Seq (stmt1, stmt2) -> eval (eval (s, i, o) stmt1) stmt2
                                                          
   end
 
