@@ -1,4 +1,5 @@
 open Ostap
+open Language
 
 let parse infile =
   let s = Util.read infile in
