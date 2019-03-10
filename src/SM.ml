@@ -24,7 +24,23 @@ type config = int list * Stmt.config
 
    Takes a configuration and a program, and returns a configuration as a result
 *)                         
-let rec eval conf prog = failwith "Not yet implemented"
+let instrEval (stack, (s, i, o)) instruction = match instruction with
+  | BINOP op -> (match stack with
+    | y :: x :: tail -> ((Language.Expr.binopEval op x y) :: tail, (s, i, o))
+    | _              -> failwith "Not enough elements in stack")
+  | CONST z  -> (z :: stack, (s, i, o))
+  | READ     -> (match i with
+    | z :: tail -> (z :: stack, (s, tail, o))
+    | _         -> failwith "Not enough elements in input")
+  | WRITE    -> (match stack with
+    | z :: tail -> (tail, (s, i, o @ [z]))
+    | _         -> failwith "Not enough elements in stack")
+  | LD x     -> ((s x) :: stack, (s, i, o))
+  | ST x     -> (match stack with
+    | z :: tail -> (tail, (Language.Expr.update x z s, i, o))
+    | _         -> failwith "Not enough elements in stack")
+
+let eval cfg p = List.fold_left instrEval cfg p
 
 (* Top-level evaluation
 
