@@ -73,6 +73,14 @@ let show instr =
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
+let cmpOpToAsm op = match op with
+  | "<"  -> "l"
+  | "<=" -> "le"
+  | ">"  -> "g"
+  | ">=" -> "ge"
+  | "==" -> "e"
+  | "!=" -> "ne"
+
 (* Symbolic stack machine evaluator
 
      compile : env -> prg -> env * instr list
@@ -107,8 +115,22 @@ let rec compile env = function
         | "+" | "-" | "*" -> env, [Mov (x, eax); Binop (op, y, eax); Mov (eax, s)]
         | "/"             -> env, [Mov (x, eax); Cltd; IDiv y; Mov (eax, s)]
         | "%"             -> env, [Mov (x, eax); Cltd; IDiv y; Mov (edx, s)]
-        | _               -> failwith "Binary operation not yet supported"
-      | _        -> failwith "Not yet supported" 
+        | "<" | "<=" | ">" | ">=" | "==" | "!=" -> env, [
+                                                     Binop ("^", eax, eax); 
+                                                     Binop ("cmp", y, x);
+                                                     Set (cmpOpToAsm op, "%al");
+                                                     Mov (eax, s) 
+                                                   ]
+        | "||" | "&&" -> env, [
+                         Binop ("^", eax, eax);
+                         Binop ("^", edx, edx);
+                         Binop ("cmp", L 0, x);
+                         Set ("ne", "%al");
+                         Binop ("cmp", L 0, y);
+                         Set ("ne", "%dl");
+                         Binop (op, eax, edx);
+                         Mov (edx, s)
+                       ] 
     in
     let env, asm' = compile env code' in
     env, asm @ asm'
