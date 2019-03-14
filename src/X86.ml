@@ -100,10 +100,13 @@ let rec compile env = function
       | ST x     ->
         let s, env = (env#global x)#pop in
         env, [Mov (s, M ("global_" ^ x))]
-      | BINOP op -> 
-        let x, y, env = env#pop2 in
+      | BINOP op ->
+        let y, x, env = env#pop2 in
+        let s, env = env#allocate in
         match op with
-        | "+" | "-" | "*" -> env#push y, [Binop (op, x, y)]
+        | "+" | "-" | "*" -> env, [Mov (x, eax); Binop (op, y, eax); Mov (eax, s)]
+        | "/"             -> env, [Mov (x, eax); Cltd; IDiv y; Mov (eax, s)]
+        | "%"             -> env, [Mov (x, eax); Cltd; IDiv y; Mov (edx, s)]
         | _               -> failwith "Binary operation not yet supported"
       | _        -> failwith "Not yet supported" 
     in
