@@ -85,22 +85,27 @@ let rec compile env = function
   | instr :: code' ->
     let env, asm = 
       match instr with
-      | CONST n -> 
+      | CONST n  -> 
         let s, env = env#allocate in
         env, [Mov (L n, s)]
-      | READ    ->
+      | READ     ->
         let s, env = env#allocate in
         env, [Call "Lread"; Mov (eax, s)]
-      | WRITE   ->
+      | WRITE    ->
         let s, env = env#pop in
         env, [Push s; Call "Lwrite"; Pop eax]
-      | LD x    ->
+      | LD x     ->
         let s, env = (env#global x)#allocate in
         env, [Mov (M ("global_" ^ x), s)]
-      | ST x    ->
+      | ST x     ->
         let s, env = (env#global x)#pop in
         env, [Mov (s, M ("global_" ^ x))]
-      | _       -> failwith "Not yet supported" 
+      | BINOP op -> 
+        let x, y, env = env#pop2 in
+        match op with
+        | "+" | "-" | "*" -> env#push y, [Binop (op, x, y)]
+        | _               -> failwith "Binary operation not yet supported"
+      | _        -> failwith "Not yet supported" 
     in
     let env, asm' = compile env code' in
     env, asm @ asm'
