@@ -86,49 +86,45 @@ let run p i =
 
 let labelGen = object 
    val mutable freeLabel = 0
-   method get = freeLabel <- freeLabel + 1; "L" ^ string_of_int freeLabel 
+   method get = freeLabel <- freeLabel + 1; "L" ^ string_of_int freeLabel
 end
 
-(*let lastAndRem l =  match (List.rev l) with 
-  | last::revRem -> (last, List.rev revRem)
-  | last::[]     -> (last, [])
-
-let rec compileIfStmt stmt finalLabel =
-  let (sLast, rem) = lastAndRem stmt in
-  let compiled = (match sLast with
-    | Stmt.If (e', s1', s2') -> 
-        let lElse = labelGen#get in
-        let compiledRem = (match rem with
-          | [] -> []
-	  | _  -> compile rem) in
-        compiledRem @ expr e' @ [CJMP ("z", lElse)] 
-          @ compileIfStmt s1' finalLabel @ [JMP finalLabel] 
-          @ [LABEL lElse] @ compileIfStmt s2' finalLabel @ [LABEL finalLabel]
-    | _ -> compile stmt) in
-    compiled*)
-
-let rec compile =
+let rec compileWithLabels p lastL =
   let rec expr = function
   | Expr.Var   x          -> [LD x]
   | Expr.Const n          -> [CONST n]
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
-  in
-  function
-  | Stmt.Seq (s1, s2)  -> compile s1 @ compile s2
-  | Stmt.Read x        -> [READ; ST x]
-  | Stmt.Write e       -> expr e @ [WRITE]
-  | Stmt.Assign (x, e) -> expr e @ [ST x]
+  in match p with
+  | Stmt.Seq (s1, s2)  -> (let newLabel = labelGen#get in
+                           let (compiled1, used1) = compileWithLabels s1 newLabel in
+                           let (compiled2, used2) = compileWithLabels s2 lastL in
+                           (compiled1 @ (if used1 then [LABEL newLabel] else []) @ compiled2), used2)
+  | Stmt.Read x        -> [READ; ST x], false
+  | Stmt.Write e       -> (expr e @ [WRITE]), false
+  | Stmt.Assign (x, e) -> (expr e @ [ST x]), false
   | Stmt.If (e, s1, s2) ->
     let lElse = labelGen#get in
-    let lFi = labelGen#get in
-    expr e @ [CJMP ("z", lElse)] @ compile s1 @ [JMP lFi] @ [LABEL lElse] @ compile s2 @ [LABEL lFi]
+    let (compiledS1, used1) = compileWithLabels s1 lastL in
+    let (compiledS2, used2) = compileWithLabels s2 lastL in 
+    (expr e @ [CJMP ("z", lElse)] 
+    @ compiledS1 @ (if used1 then [] else [JMP lastL]) @ [LABEL lElse]
+    @ compiledS2 @ (if used2 then [] else [JMP lastL])), true
   | Stmt.While (e, body) ->
     let lCheck = labelGen#get in
     let lLoop = labelGen#get in
-    [JMP lCheck; LABEL lLoop] @ compile body @ [LABEL lCheck] @ expr e @ [CJMP ("nz", lLoop)]
+    let (doBody, _) = compileWithLabels body lCheck in
+    ([JMP lCheck; LABEL lLoop] @ doBody @ [LABEL lCheck] @ expr e @ [CJMP ("nz", lLoop)]), false
   | Stmt.RepeatUntil (body, e) ->
     let lLoop = labelGen#get in
-    [LABEL lLoop] @ compile body @ expr e @ [CJMP ("z", lLoop)]
-  | Stmt.Skip -> []
-  | _ -> failwith "Not impl"
+    let (repeatBody, _) = compileWithLabels body lastL in
+    ([LABEL lLoop] @ repeatBody @ expr e @ [CJMP ("z", lLoop)]), false
+  | Stmt.Skip -> [], false
+
+let rec compile p =
+  let label = labelGen#get in
+  let compiled, used = compileWithLabels p label in
+  compiled @ (if used then [LABEL label] else [])
+
+  
+  
 
