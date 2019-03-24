@@ -104,10 +104,10 @@ let rec compile env = function
         env, [Push s; Call "Lwrite"; Pop eax]
       | LD x     ->
         let s, env = (env#global x)#allocate in
-        env, [Mov (M ("global_" ^ x), s)]
+        env, [Mov (M ("global_" ^ x), eax); Mov (eax, s)]
       | ST x     ->
         let s, env = (env#global x)#pop in
-        env, [Mov (s, M ("global_" ^ x))]
+        env, [Mov (s, eax); Mov (eax, M ("global_" ^ x))]
       | BINOP op ->
         let y, x, env = env#pop2 in
         let s, env = env#allocate in
@@ -116,12 +116,13 @@ let rec compile env = function
         | "/"             -> env, [Mov (x, eax); Cltd; IDiv y; Mov (eax, s)]
         | "%"             -> env, [Mov (x, eax); Cltd; IDiv y; Mov (edx, s)]
         | "<" | "<=" | ">" | ">=" | "==" | "!=" -> env, [
+                                                     Mov (x, edx);
                                                      Binop ("^", eax, eax); 
-                                                     Binop ("cmp", y, x);
+                                                     Binop ("cmp", y, edx);
                                                      Set (cmpOpToAsm op, "%al");
                                                      Mov (eax, s) 
                                                    ]
-        | "||" | "&&" -> env, [
+        | "!!" | "&&" -> env, [
                          Binop ("^", eax, eax);
                          Binop ("^", edx, edx);
                          Binop ("cmp", L 0, x);
