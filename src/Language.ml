@@ -206,9 +206,19 @@ module Expr =
               |] 
 	     )
 	     primary);
-      
+
       primary:
+        b:base acss:(-"[" !(parse) -"]")* l:("." %"length")?
+        {
+          let elements = List.fold_left (fun a i -> Elem (a, i)) b acss in match l with
+            | Some x -> Length elements
+            | None   -> elements
+        };
+      base:
         n:DECIMAL {Const n}
+      | s:STRING  {String (String.sub s 1 ((String.length s) - 2))}
+      | c:CHAR    {Const (Char.code c)}
+      | "[" es:!(Util.list0 parse) "]" { Array es }
       | x:IDENT opt:("(" args:!(Util.list0 parse) ")" {Call (x, args)} | empty {Var x}) {opt}
       | -"(" parse -")"
     )
@@ -250,11 +260,72 @@ module Stmt =
       in
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
           
-    let rec eval env ((st, i, o, r) as conf) k stmt = failwith "Not implemented"
+    let metaOp x y = match x with
+      | Skip -> y
+      | _ -> match y with
+        | Skip -> x
+        | _ -> Seq (x, y)
+    let rec eval env ((st, i, o, r) as conf) k stmt = match stmt with
+      | Assign (x, is, e)          -> let (st, i, o, is) = Expr.eval_list env conf is in
+                                      let (st, i, o, Some r) = Expr.eval env (st, i, o, None) e in
+                                      eval env (update st x r is, i, o, None) Skip k
+      | Seq (stmt1, stmt2)         -> eval env conf (metaOp stmt2 k) stmt1
+      | Skip                       -> (match k with
+                                        | Skip -> conf
+                                        | _    -> eval env conf Skip k)
+      | If (e, thenStmt, elseStmt) -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in 
+                                        if MyUtils.itb (Value.to_int r) then eval env conf' k thenStmt 
+                                        else eval env conf' k elseStmt
+      | While (e, wStmt)           -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in
+                                        if MyUtils.itb (Value.to_int r) then eval env conf' (metaOp stmt k) wStmt
+                                        else eval env conf' Skip k
+      | Repeat (ruStmt, e)         -> eval env conf (metaOp (While (Expr.Binop ("==", e, Expr.Const 0), ruStmt)) k) ruStmt
+      | Call (fName, argsE)        -> eval env (Expr.eval env conf (Expr.Call (fName, argsE))) Skip k
+      | Return x                   -> (match x with
+                                        | Some x -> Expr.eval env conf x
+                                        | None   -> conf
+                                      )
          
     (* Statement parser *)
-    ostap (
-      parse: empty {failwith "Not implemented"}
+    ostap (   
+      simple:
+        x:IDENT is: (-"[" !(Expr.parse) -"]")* ":=" e:!(Expr.parse) {Assign (x, is, e)};
+      ifStmt:
+        "if" e:!(Expr.parse) "then" thenBody:parse
+	elifBranches: (%"elif" elifE:!(Expr.parse) %"then" elifBody:!(parse))*
+	elseBranch: (%"else" elseBody:!(parse))?
+	"fi" {
+	       let elseBranch' = match elseBranch with
+	         | Some x -> x
+                 | None   -> Skip in
+	       let expandedElseBody = List.fold_right (fun (e', body') else' -> If (e', body', else')) elifBranches elseBranch' in
+	       If (e, thenBody, expandedElseBody)  
+	     };
+      whileStmt:
+        "while" e:!(Expr.parse) "do" body:parse "od" {While (e, body)};
+      forStmt:
+        "for" initStmt:stmt "," whileCond:!(Expr.parse) "," forStmt:stmt
+        "do" body:parse "od" {Seq (initStmt, While (whileCond, Seq (body, forStmt)))};
+      repeatUntilStmt:
+	"repeat" body:parse "until" e:!(Expr.parse) {Repeat (body, e)};
+      control:
+          ifStmt
+        | whileStmt
+        | forStmt
+	| repeatUntilStmt
+	| "skip" {Skip};
+      call:
+          fName:IDENT "(" argsE:(!(Expr.parse))* ")" {Call (fName, argsE)};
+      returnStmt:
+          "return" e:!(Expr.parse)? { Return e };
+      stmt:
+          simple 
+        | control
+        | call
+        | returnStmt;
+      parse:
+          stmt1:stmt ";" rest:parse {Seq (stmt1, rest)}
+        | stmt
     )
       
   end
