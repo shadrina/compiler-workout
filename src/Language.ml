@@ -7,11 +7,36 @@ open GT
 open Ostap
 open Combinators
 
-let initList n ~f =
-  let rec initList' i n f =
-    if i >= n then []
-    else (f i) :: (initList' (i+1) n f)
-  in initList' 0 n f
+module MyUtils =
+  struct
+
+  let initList n ~f =
+    let rec initList' i n f =
+      if i >= n then []
+      else (f i) :: (initList' (i+1) n f)
+    in initList' 0 n f
+
+  let bti   = function true -> 1 | _ -> 0
+  let itb b = b <> 0
+  let toFunc op =
+    let (|>) f g   = fun x y -> f (g x y) in
+      match op with
+      | "+"  -> (+)
+      | "-"  -> (-)
+      | "*"  -> ( * )
+      | "/"  -> (/)
+      | "%"  -> (mod)
+      | "<"  -> bti |> (< )
+      | "<=" -> bti |> (<=)
+      | ">"  -> bti |> (> )
+      | ">=" -> bti |> (>=)
+      | "==" -> bti |> (= )
+      | "!=" -> bti |> (<>)
+      | "&&" -> fun x y -> bti (itb x && itb y)
+      | "!!" -> fun x y -> bti (itb x || itb y)
+      | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)
+
+  end
 
 (* Values *)
 module Value =
@@ -35,8 +60,8 @@ module Value =
     let of_string s = String s
     let of_array  a = Array  a
 
-    let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = initList    (List.length a)   (fun j -> if j = i then x else List.nth a j)
+    let update_string s i x = String.init      (String.length s) (fun j -> if j = i then x else s.[j])
+    let update_array  a i x = MyUtils.initList (List.length a)   (fun j -> if j = i then x else List.nth a j)
 
   end
        
@@ -132,8 +157,19 @@ module Expr =
 
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration, 
        an returns a pair: the return value for the call and the resulting configuration
-    *)                                                       
-    let rec eval env ((st, i, o, r) as conf) expr = failwith "Not implemented"
+    *)
+    let rec eval env ((st, i, o, r) as conf) expr = match expr with
+      | Const n  -> (st, i, o, Some (Value.of_int n))
+      | String s -> (st, i, o, Some (Value.of_string s))
+      | Var x    -> (st, i, o, Some (State.eval st x))
+      | Binop (op, x, y) -> let ((st', i', o', Some a) as conf') = eval env conf x in
+                              let (st', i', o', Some b) = eval env conf' y in
+                              (st', i', o', Some (Value.of_int @@ MyUtils.toFunc op (Value.to_int a) (Value.to_int b)))
+      | Call (fName, argsE) -> let (st', i', o', args) = List.fold_left (fun (st, i, o, args) e ->
+                                                                          let ((st, i, o, Some r) as conf') = eval env (st, i, o, None) e in
+                                                                          (st, i, o, args @ [r])
+                                                                        ) (st, i, o, []) argsE in 
+                               env#definition env fName args (st', i', o', None)
     and eval_list env conf xs =
       let vs, (st, i, o, _) =
         List.fold_left
