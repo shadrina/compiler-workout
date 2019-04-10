@@ -104,7 +104,7 @@ module Expr =
                                                                           let ((st, i, o, Some r) as conf') = eval env (st, i, o, None) e in
                                                                           (st, i, o, args @ [r])
                                                                         ) (st, i, o, []) argsE in 
-                               env#definition env fName args (st, i, o, None)
+                               env#definition env fName args (st', i', o', None)
 
 
     (* Expression parser. You can use the following terminals:
