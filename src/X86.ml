@@ -92,18 +92,74 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code =
-  let suffix = function
+let cmpOpToAsm op = match op with
   | "<"  -> "l"
   | "<=" -> "le"
+  | ">"  -> "g"
+  | ">=" -> "ge"
   | "==" -> "e"
   | "!=" -> "ne"
-  | ">=" -> "ge"
-  | ">"  -> "g"
-  | _    -> failwith "unknown operator"	
-  in
-  let rec compile' env scode = failwith "Not implemented" in
-  compile' env code
+
+let rec compile env = function
+  | []             -> env, []
+  | instr :: code' ->
+    let env, asm = 
+      match instr with
+      | CONST n  ->
+        let s, env = env#allocate in
+        env, [Mov (L n, s)]
+      | LD x -> let s, env' = env#allocate in
+        let v = env#loc x in
+        env', [Mov (v, eax); Mov (eax, s)]
+      | ST x -> let s, env' = (env#global x)#pop in
+        let v = env#loc x in
+        env',  [Mov (s, eax); Mov (eax, v)]
+      | BINOP op -> (
+        let y, x, env = env#pop2 in
+        let s, env = env#allocate in
+        match op with
+        | "+" | "-" | "*" -> env, [Mov (x, eax); Binop (op, y, eax); Mov (eax, s)]
+        | "/"             -> env, [Mov (x, eax); Cltd; IDiv y; Mov (eax, s)]
+        | "%"             -> env, [Mov (x, eax); Cltd; IDiv y; Mov (edx, s)]
+        | "<" | "<=" | ">" | ">=" | "==" | "!=" -> env, [
+                                                     Mov (x, edx);
+                                                     Binop ("^", eax, eax); 
+                                                     Binop ("cmp", y, edx);
+                                                     Set (cmpOpToAsm op, "%al");
+                                                     Mov (eax, s) 
+                                                   ]
+        | "!!" | "&&" -> env, [
+                           Binop ("^", eax, eax);
+                           Binop ("^", edx, edx);
+                           Binop ("cmp", L 0, x);
+                           Set ("ne", "%al");
+                           Binop ("cmp", L 0, y);
+                           Set ("ne", "%dl");
+                           Binop (op, eax, edx);
+                           Mov (edx, s)
+                         ])
+      | LABEL l  -> env, [Label l]
+      | JMP l    -> env, [Jmp l]
+      | CJMP (znz, l) -> let h, env = env#pop in env, [Binop ("cmp", L 0, h); CJmp (znz, l)]
+      | CALL (fName, argsN, flag) -> 
+        let (env, args) = List.fold_left (fun (env, args) _ -> let a, env = env#pop in (env, a::args)) (env, []) (MyUtils.initList argsN (fun x -> x)) in
+        let (env, getRes) = if flag then let (a, env) = env#allocate in env, [Mov (eax, a)]
+                            else env, [] in
+        env, (List.map (fun x -> Push x) args) @ [Call fName; Binop ("+", L (argsN * word_size), esp)] @ getRes
+      | BEGIN (fName, params, locals) -> 
+        let pushRegs = List.map (fun x -> Push (R x)) (MyUtils.initList num_of_regs (fun x -> x)) in
+        let env = env#enter fName params locals in
+        env, [Push ebp; Mov (esp, ebp)] @ pushRegs @ [Binop ("-", M ("$" ^ env#lsize), esp)]
+      | END ->
+        let popRegs = List.map (fun x -> Pop (R x)) (List.rev (MyUtils.initList num_of_regs (fun x -> x))) in 
+          let meta = [Meta (Printf.sprintf "\t.set %s, %d" env#lsize (env#allocated * word_size))] in
+          env, [Label env#epilogue] @ popRegs @  [Mov (ebp, esp); Pop ebp; Ret] @ meta
+      | RET flag ->
+        if flag then let a,env = env#pop in env, [Mov (a, eax); Jmp env#epilogue]
+        else env, [Jmp env#epilogue]
+    in
+    let env, asm' = compile env code' in
+    env, asm @ asm'
 
 (* A set of strings *)           
 module S = Set.Make (String)

@@ -289,7 +289,7 @@ module Stmt =
     (* Statement parser *)
     ostap (   
       simple:
-        x:IDENT is: (-"[" !(Expr.parse) -"]")* ":=" e:!(Expr.parse) {Assign (x, is, e)};
+        x:IDENT is:(-"[" !(Expr.parse) -"]")* ":=" e:!(Expr.parse) {Assign (x, is, e)};
       ifStmt:
         "if" e:!(Expr.parse) "then" thenBody:parse
 	elifBranches: (%"elif" elifE:!(Expr.parse) %"then" elifBody:!(parse))*
