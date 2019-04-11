@@ -92,6 +92,7 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
+
 let cmpOpToAsm op = match op with
   | "<"  -> "l"
   | "<=" -> "le"
@@ -108,6 +109,8 @@ let rec compile env = function
       | CONST n  ->
         let s, env = env#allocate in
         env, [Mov (L n, s)]
+      | STRING s -> failwith "Unsupported STRING"
+      | STA (_, _) -> failwith "Unsupported STA"
       | LD x -> let s, env' = env#allocate in
         let v = env#loc x in
         env', [Mov (v, eax); Mov (eax, s)]
@@ -141,11 +144,23 @@ let rec compile env = function
       | LABEL l  -> env, [Label l]
       | JMP l    -> env, [Jmp l]
       | CJMP (znz, l) -> let h, env = env#pop in env, [Binop ("cmp", L 0, h); CJmp (znz, l)]
-      | CALL (fName, argsN, flag) -> 
-        let (env, args) = List.fold_left (fun (env, args) _ -> let a, env = env#pop in (env, a::args)) (env, []) (MyUtils.initList argsN (fun x -> x)) in
-        let (env, getRes) = if flag then let (a, env) = env#allocate in env, [Mov (eax, a)]
-                            else env, [] in
-        env, (List.map (fun x -> Push x) args) @ [Call fName; Binop ("+", L (argsN * word_size), esp)] @ getRes
+      | CALL (fName, argsN, flag) ->
+        let pushRegs = List.map (fun x -> Push x) env#live_registers in
+        let popRegs = List.rev (List.map (fun x -> Pop x) env#live_registers) in
+        let realName = match fName with
+          | "read"  -> "Lread"
+          | "write" -> "Lwrite"
+          | _       -> fName in
+        let rec pushArgs env' = function
+          | 0 -> env', []
+          | n -> let x, env'' = env'#pop in
+                 let env'', a = pushArgs env'' (n - 1) in
+                 env'', a @ [Push x] in
+        let env', compiledArgs = pushArgs env argsN in
+        let env', getRes = 
+          if flag then let x, env'' = env'#allocate in env'', [Mov (eax, x)]
+          else env', [] in
+        env', pushRegs @ compiledArgs @ [Call realName; Binop ("+", L (argsN * word_size), esp)] @ popRegs @ getRes
       | BEGIN (fName, params, locals) -> 
         let pushRegs = List.map (fun x -> Push (R x)) (MyUtils.initList num_of_regs (fun x -> x)) in
         let env = env#enter fName params locals in
@@ -157,10 +172,11 @@ let rec compile env = function
       | RET flag ->
         if flag then let a,env = env#pop in env, [Mov (a, eax); Jmp env#epilogue]
         else env, [Jmp env#epilogue]
+      | _ -> failwith "?"
     in
     let env, asm' = compile env code' in
     env, asm @ asm'
-
+                                
 (* A set of strings *)           
 module S = Set.Make (String)
 
@@ -185,14 +201,14 @@ class env =
     (* allocates a fresh position on a symbolic stack *)
     method allocate =    
       let x, n =
-        let rec allocate' = function
-        | []                            -> R 0     , 0
-        | (S n)::_                      -> S (n+1) , n+2
-        | (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
+	let rec allocate' = function
+	| []                            -> ebx     , 0
+	| (S n)::_                      -> S (n+1) , n+1
+	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
         | (M _)::s                      -> allocate' s
-        | _                             -> let n = List.length locals in S n, n+1
-        in
-        allocate' stack
+	| _                             -> S 0     , 1
+	in
+	allocate' stack
       in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 
@@ -227,7 +243,7 @@ class env =
     (* returns a list of live registers *)
     method live_registers =
       List.filter (function R _ -> true | _ -> false) stack
-       
+      
   end
   
 (* Generates an assembler text for a program: first compiles the program into
@@ -255,3 +271,4 @@ let build prog name =
   let inc = try Sys.getenv "RC_RUNTIME" with _ -> "../runtime" in
   Sys.command (Printf.sprintf "gcc -m32 -o %s %s/runtime.o %s.s" name inc name)
  
+
