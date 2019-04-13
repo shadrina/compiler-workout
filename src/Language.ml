@@ -204,9 +204,10 @@ module Expr =
     
     let rec eval env ((st, i, o, r) as conf) expr = match expr with
       | Const n  -> (st, i, o, Some (Value.of_int n))
-      | Array l  -> let (st, i, o, v) = eval_list env conf l in env#definition env "$array" v (st, i, o, None)
       | String s -> (st, i, o, Some (Value.of_string s))
-      | Var x    -> (st, i, o, Some (State.eval st x))
+      | Array l        -> let (st, i, o, v) = eval_list env conf l    in env#definition env "$array" v (st, i, o, None)
+      | Sexp (t, args) -> let (st, i, o, v) = eval_list env conf args in (st, i, o, Some (Value.Sexp (t, v)))
+      | Var x          -> (st, i, o, Some (State.eval st x))
       | Binop (op, x, y) -> let ((st, i, o, Some a) as conf') = eval env conf x in
                             let (st, i, o, Some b) = eval env conf' y in
                             (st, i, o, Some (Value.of_int @@ MyUtils.toFunc op (Value.to_int a) (Value.to_int b)))
@@ -259,11 +260,13 @@ module Expr =
             | None   -> elements
         };
       base:
-        n:DECIMAL {Const n}
-      | s:STRING  {String (String.sub s 1 ((String.length s) - 2))}
-      | c:CHAR    {Const (Char.code c)}
-      | "[" es:!(Util.list0 parse) "]" { Array es }
-      | x:IDENT opt:("(" args:!(Util.list0 parse) ")" {Call (x, args)} | empty {Var x}) {opt}
+        n:DECIMAL                                       {Const n}
+      | s:STRING                                        {String (String.sub s 1 ((String.length s) - 2))}
+      | c:CHAR                                          {Const (Char.code c)}
+      | "[" es:!(Util.list0 parse) "]"                  {Array es}
+      | "`" t:IDENT args:(-"(" !(Util.list)[parse] -")")? {let args = match args with Some x -> x | None -> [] in
+                                                           Sexp (t, args)}
+      | x:IDENT opt:("(" args:!(Util.list0 parse) ")"     {Call (x, args)} | empty {Var x}) {opt}
       | -"(" parse -")"
     )
     
@@ -286,7 +289,11 @@ module Stmt =
 
         (* Pattern parser *)                                 
         ostap (
-          parse: empty {failwith "Not implemented"}
+          parse:
+            x:IDENT {Ident x}
+          | "_"     {Wildcard}
+          | "`" t:IDENT args:(-"(" !(Util.list)[parse] -")")? {let args = match args with Some x -> x | None -> [] in
+                                                               Sexp (t, args)}
         )
         
         let vars p =
@@ -382,7 +389,7 @@ module Stmt =
       call:
           fName:IDENT "(" argsE:(!(Expr.parse))* ")" {Call (fName, argsE)};
       returnStmt:
-          "return" e:!(Expr.parse)? { Return e };
+          "return" e:!(Expr.parse)? {Return e};
       stmt:
           simple 
         | control
