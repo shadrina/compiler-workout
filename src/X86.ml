@@ -1,3 +1,5 @@
+open Language
+
 (* X86 codegeneration interface *)
 
 (* The registers: *)
@@ -264,7 +266,7 @@ module S = Set.Make (String)
 module M = Map.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+let make_assoc l = List.combine l (MyUtils.initList (List.length l) (fun x -> x))
                      
 class env =
   object (self)
