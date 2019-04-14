@@ -205,14 +205,14 @@ module Expr =
     let rec eval env ((st, i, o, r) as conf) expr = match expr with
       | Const n  -> (st, i, o, Some (Value.of_int n))
       | String s -> (st, i, o, Some (Value.of_string s))
-      | Array l        -> let (st, i, o, v) = eval_list env conf l    in env#definition env "$array" v (st, i, o, None)
+      | Array l        -> let (st, i, o, v) = eval_list env conf l    in env#definition env ".array" v (st, i, o, None)
       | Sexp (t, args) -> let (st, i, o, v) = eval_list env conf args in (st, i, o, Some (Value.Sexp (t, v)))
       | Var x          -> (st, i, o, Some (State.eval st x))
       | Binop (op, x, y) -> let ((st, i, o, Some a) as conf') = eval env conf x in
                             let (st, i, o, Some b) = eval env conf' y in
                             (st, i, o, Some (Value.of_int @@ MyUtils.toFunc op (Value.to_int a) (Value.to_int b)))
-      | Elem (a, i)      -> let (st, i, o, v) = eval_list env conf [a; i] in env#definition env "$elem" v (st, i, o, None)
-      | Length n         -> let (st, i, o, v) = eval_list env conf [n] in env#definition env "$length" v (st, i, o, None)
+      | Elem (a, i)      -> let (st, i, o, v) = eval_list env conf [a; i] in env#definition env ".elem" v (st, i, o, None)
+      | Length n         -> let (st, i, o, v) = eval_list env conf [n] in env#definition env ".length" v (st, i, o, None)
       | Call (fName, argsE) -> let (st', i', o', args) = List.fold_left (fun (st, i, o, args) e ->
                                                                           let ((st, i, o, Some r) as conf') = eval env (st, i, o, None) e in
                                                                           (st, i, o, args @ [r])
@@ -266,7 +266,7 @@ module Expr =
       | "[" es:!(Util.list0 parse) "]"                  {Array es}
       | "`" t:IDENT args:(-"(" !(Util.list)[parse] -")")? {let args = match args with Some x -> x | None -> [] in
                                                            Sexp (t, args)}
-      | x:IDENT opt:("(" args:!(Util.list0 parse) ")"     {Call (x, args)} | empty {Var x}) {opt}
+      | x:IDENT opt:("(" args:!(Util.list0 parse) ")" {Call (x, args)} | empty {Var x}) {opt}
       | -"(" parse -")"
     )
     
@@ -342,21 +342,41 @@ module Stmt =
                                       let (st, i, o, Some r) = Expr.eval env (st, i, o, None) e in
                                       eval env (update st x r is, i, o, None) Skip k
       | Seq (stmt1, stmt2)         -> eval env conf (metaOp stmt2 k) stmt1
+      | If (e, thenStmt, elseStmt) -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in 
+                                      if MyUtils.itb (Value.to_int r) then eval env conf' k thenStmt 
+                                      else eval env conf' k elseStmt
+      | While (e, wStmt)           -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in
+                                      if MyUtils.itb (Value.to_int r) then eval env conf' (metaOp stmt k) wStmt
+                                      else eval env conf' Skip k
+      | Repeat (ruStmt, e)         -> eval env conf (metaOp (While (Expr.Binop ("==", e, Expr.Const 0), ruStmt)) k) ruStmt
+      | Case (e, bs)               -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in
+                                      let rec matchPattern p v st =
+                                        let update x v = function
+                                          | Some s -> Some (State.bind x v s)
+                                          | None   -> None in
+                                        match p, v with
+                                        | Pattern.Ident x, v    -> update x v st
+                                        | Pattern.Wildcard, v   -> st
+                                        | Pattern.Sexp (t, ps), Value.Sexp (t', vs) -> if t = t' then matchList ps vs st else None
+                                      and matchList ps vs st = match ps, vs with
+                                        | p::ps', v::vs' -> matchList ps' vs' (matchPattern p v st)
+                                        | [], []         -> st
+                                        | _              -> None in
+                                      let rec checkBranch ((st, i, o, _) as conf) = function
+                                        | (pattern, b)::tail -> let matchingResult = matchPattern pattern r (Some State.undefined) in
+                                                                (match matchingResult with
+                                                                | Some st' -> eval env ((State.push st st' (Pattern.vars pattern)), i, o, None) k (Seq (b, Leave))
+                                                                | None     -> checkBranch conf tail)
+                                        | []                 -> failwith "Pattern matching failed" in
+                                      checkBranch conf' bs
+      | Call (fName, argsE)        -> eval env (Expr.eval env conf (Expr.Call (fName, argsE))) Skip k
+      | Leave                      -> eval env (State.drop st, i, o, r) Skip k
+      | Return x                   -> (match x with
+                                        | Some x -> Expr.eval env conf x
+                                        | None   -> conf)
       | Skip                       -> (match k with
                                         | Skip -> conf
                                         | _    -> eval env conf Skip k)
-      | If (e, thenStmt, elseStmt) -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in 
-                                        if MyUtils.itb (Value.to_int r) then eval env conf' k thenStmt 
-                                        else eval env conf' k elseStmt
-      | While (e, wStmt)           -> let ((st, i, o, Some r) as conf') = Expr.eval env conf e in
-                                        if MyUtils.itb (Value.to_int r) then eval env conf' (metaOp stmt k) wStmt
-                                        else eval env conf' Skip k
-      | Repeat (ruStmt, e)         -> eval env conf (metaOp (While (Expr.Binop ("==", e, Expr.Const 0), ruStmt)) k) ruStmt
-      | Call (fName, argsE)        -> eval env (Expr.eval env conf (Expr.Call (fName, argsE))) Skip k
-      | Return x                   -> (match x with
-                                        | Some x -> Expr.eval env conf x
-                                        | None   -> conf
-                                      )
                                                         
     (* Statement parser *)
     ostap (   
@@ -364,8 +384,8 @@ module Stmt =
         x:IDENT is:(-"[" !(Expr.parse) -"]")* ":=" e:!(Expr.parse) {Assign (x, is, e)};
       ifStmt:
         "if" e:!(Expr.parse) "then" thenBody:parse
-	elifBranches: (%"elif" elifE:!(Expr.parse) %"then" elifBody:!(parse))*
-	elseBranch: (%"else" elseBody:!(parse))?
+	elifBranches:(%"elif" elifE:!(Expr.parse) %"then" elifBody:!(parse))*
+	elseBranch:(%"else" elseBody:!(parse))?
 	"fi" {
 	       let elseBranch' = match elseBranch with
 	         | Some x -> x
@@ -380,11 +400,17 @@ module Stmt =
         "do" body:parse "od" {Seq (initStmt, While (whileCond, Seq (body, forStmt)))};
       repeatUntilStmt:
 	"repeat" body:parse "until" e:!(Expr.parse) {Repeat (body, e)};
+      caseStmt:
+        "case" e:!(Expr.parse) "of"
+        fb:(-("|")? p:!(Pattern.parse) -"->" b:!(parse))
+        bs:(-"|"    p:!(Pattern.parse) -"->" b:!(parse))*
+        "esac" {Case (e, fb::bs)};
       control:
           ifStmt
         | whileStmt
         | forStmt
 	| repeatUntilStmt
+        | caseStmt
 	| "skip" {Skip};
       call:
           fName:IDENT "(" argsE:(!(Expr.parse))* ")" {Call (fName, argsE)};
