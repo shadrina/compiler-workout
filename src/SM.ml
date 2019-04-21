@@ -109,7 +109,7 @@ let run p i =
          method builtin (cstack, stack, (st, i, o)) f n p =
            let f = match f.[0] with 'L' -> String.sub f 1 (String.length f - 1) | _ -> f in
            let args, stack' = split n stack in
-           let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) (List.rev args) f in
+           let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) args f in
            let stack'' = if p then stack' else let Some r = r in r::stack' in
            (*Printf.printf "Builtin:\n";*)
            (cstack, stack'', (st, i, o))
