@@ -154,6 +154,15 @@ module Builtin =
                     )         
     | ".length"     -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Sexp (_, a) -> List.length a | Value.Array a -> Array.length a | Value.String s -> Bytes.length s)))
     | ".array"      -> (st, i, o, Some (Value.of_array @@ Array.of_list args))
+    | ".string"     -> let stringify v = Some (Value.String (Bytes.of_string v)) in
+                       let rec convert v = match v with
+                         | (Value.String bytes) -> Printf.sprintf "\"%s\"" (Bytes.to_string bytes)
+                         | (Value.Int num) -> string_of_int num
+                         | (Value.Array elems) -> let elemsStr = String.concat ", " (List.map convert (Array.to_list elems)) in Printf.sprintf "[%s]" elemsStr
+                         | (Value.Sexp (t, args)) ->
+                            if (List.length args != 0) then let argsStr = String.concat ", " (List.map convert args) in Printf.sprintf "`%s (%s)" t argsStr
+                            else Printf.sprintf "`%s" t
+                       in (st, i, o, stringify (convert (List.hd args)))
     | "isArray"  -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.Array  _ -> 1 | _ -> 0))
     | "isString" -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.String _ -> 1 | _ -> 0))                     
        
@@ -253,11 +262,15 @@ module Expr =
 	     primary);
 
       primary:
-        b:base acss:(-"[" !(parse) -"]")* l:("." %"length")?
+        b:base acss:(-"[" !(parse) -"]")* l:("." %"length")? s:("." %"string")?
         {
-          let elements = List.fold_left (fun a i -> Elem (a, i)) b acss in match l with
+          let elements = List.fold_left (fun a i -> Elem (a, i)) b acss in
+          let withLSuffix = match l with
             | Some x -> Length elements
-            | None   -> elements
+            | None   -> elements in
+          match s with
+            | Some x -> Call (".string", [withLSuffix])
+            | None   -> withLSuffix
         };
       base:
         n:DECIMAL                                       {Const n}
