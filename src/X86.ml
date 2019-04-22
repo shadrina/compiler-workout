@@ -158,7 +158,7 @@ let rec compile env = function
                  env'', a @ [Push x] in
         let env', compiledArgs = pushArgs env argsN in
         let env', getRes = 
-          if flag then let x, env'' = env'#allocate in env'', [Mov (eax, x)]
+          if not flag then let x, env'' = env'#allocate in env'', [Mov (eax, x)]
           else env', [] in
         env', pushRegs @ compiledArgs @ [Call realName; Binop ("+", L (argsN * word_size), esp)] @ popRegs @ getRes
       | BEGIN (fName, params, locals) -> 

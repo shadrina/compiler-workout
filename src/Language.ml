@@ -150,6 +150,7 @@ module Builtin =
                                      | Value.String   s  -> Value.of_int @@ Char.code (Bytes.get s i)
                                      | Value.Array    a  -> a.(i)
                                      | Value.Sexp (_, a) -> List.nth a i
+                                     | _                 -> failwith "hm"
                                )
                     )         
     | ".length"     -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Sexp (_, a) -> List.length a | Value.Array a -> Array.length a | Value.String s -> Bytes.length s)))

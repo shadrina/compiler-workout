@@ -23,6 +23,7 @@ open Language
 (* checks the tag of S-expression  *) | TAG     of string
 (* enters a scope                  *) | ENTER   of string list
 (* leaves a scope                  *) | LEAVE
+(* drop values from stack and jmp  *) | ZJMPDROP of string * int
 with show
                                                    
 (* The type for the stack machine program *)
@@ -78,9 +79,9 @@ let rec eval env (controlSt, st, ((s, i, o) as config)) p =
                                    ((Value.of_int res)::st', config)
     | ENTER xs                  -> let vs, st' = split (List.length xs) st in
                                    (st', (State.push s (List.fold_left (fun s' (x, v) -> State.bind x v s') State.undefined (List.combine xs vs)) xs, i, o))
-    | LEAVE                     -> (st, (State.drop s, i, o))
+    | LEAVE                     -> (st, (State.drop s, i, o)) 
     in match p with
-       | x::xs -> (Printf.printf "Exec: %s\n" (show(insn) x); match x with 
+       | x::xs -> (match x with 
         | JMP l -> eval env (controlSt, st, config) (env#labeled l)
         | CJMP (znz, l) -> (match st with
                             | head::tail -> let v = (Value.to_int head) in
@@ -88,6 +89,10 @@ let rec eval env (controlSt, st, ((s, i, o) as config)) p =
                                               else eval env (controlSt, tail, config) xs 
                               | _          -> failwith "CJMP failed with empty stack"
                            )
+        | ZJMPDROP (l, d) -> let z::st' = st in
+                             if Value.to_int z = 0 then let (_,  st'') = split d st' in
+                                                        eval env (controlSt, st'', config) (env#labeled l)
+                             else eval env (controlSt, st', config) xs
         | CALL (f, n, fl) -> if env#is_label f then eval env ((xs, s)::controlSt, st, config) (env#labeled f)
                              else eval env (env#builtin (controlSt, st, config) f n fl) xs
         | RET _ | END     -> (match controlSt with
@@ -144,21 +149,30 @@ let labelGen = object
    method get = freeLabel <- freeLabel + 1; "L" ^ string_of_int freeLabel
   end
 
-let rec matchPattern lFalse = function
+(* Assume that on the top of the stack there is already a duplicated version of element *)
+let rec matchPattern lFalse depth = function
   | Stmt.Pattern.Wildcard | Stmt.Pattern.Ident _ -> false, [DROP]
-  | Stmt.Pattern.Sexp (t, ps) -> true, [DUP; TAG t; CJMP ("z", lFalse)] @ (
-                                   List.concat @@
-                                     List.mapi (fun i p -> [DUP; CONST i; CALL (".elem", 2, false)] @ snd (matchPattern lFalse p)) ps)
+  | Stmt.Pattern.Sexp (t, ps) -> true, [TAG t] @ [ZJMPDROP (lFalse, depth)] @ (
+                                   List.flatten @@
+                                     List.mapi (fun i p -> [DUP; CONST i; CALL (".elem", 2, false)] @
+                                                             (match p with
+                                                              | Stmt.Pattern.Sexp (_, ps') -> (if List.length ps' > 0 then [DUP] @ snd (matchPattern lFalse (depth + 1) p) @ [DROP]
+                                                                                               else snd (matchPattern lFalse depth p))
+                                                              | _ -> snd (matchPattern lFalse depth p))
+                                               ) ps)
 
-let makeBindings p =
-  let rec inner = function
-    | Stmt.Pattern.Wildcard -> [DROP]
-    | Stmt.Pattern.Ident n  -> [SWAP]
-    | Stmt.Pattern.Sexp (_, ps) -> (List.flatten @@
-                                      List.mapi (fun i p -> [DUP; CONST i; CALL (".elem", 2, false)] @ inner p) ps
-                                   ) @ [DROP] in
-  inner p @ [ENTER (Stmt.Pattern.vars p)]
-
+(* Idea taken from #513 *)
+let rec makeBindings p =
+  let rec inner p' = match p' with
+    | Stmt.Pattern.Wildcard -> []
+    | Stmt.Pattern.Ident var -> [[]]
+    | Stmt.Pattern.Sexp (_, xs) ->
+       let next i x = List.map (fun arr -> i::arr) (inner x) in
+       List.flatten (List.mapi next xs) in
+  let topElem i = [CONST i; CALL (".elem", 2, false)] in
+  let extractBindValue path = [DUP] @ (List.flatten (List.map topElem path)) @ [SWAP] in
+  List.flatten (List.map extractBindValue (List.rev (inner p)))
+  
 let rec compileWithLabels p lastL =
   let rec call f args fl =
     let argsCode = List.flatten @@ List.map expr args in
@@ -202,10 +216,20 @@ let rec compileWithLabels p lastL =
                                 ), false
   | Stmt.Leave               -> [LEAVE], false
   | Stmt.Case (e, [p, s])    -> (* TODO: Reverse matchPattern return tuple *)
-                                let pUsed, pCode = matchPattern lastL p in
+                                let pUsed, pCode = matchPattern lastL 0 p in
                                 let sBody, sUsed = compileWithLabels (Stmt.Seq (s, Stmt.Leave)) lastL in
-                                expr e @ pCode @ makeBindings p @ sBody, pUsed || sUsed
-
+                                expr e @ [DUP] @ pCode @ makeBindings p @ [DROP; ENTER (List.rev (Stmt.Pattern.vars p))] @ sBody, pUsed || sUsed
+  | Stmt.Case (e, bs)        -> let n = List.length bs - 1 in
+                                let _, _, code = List.fold_left
+                                                   (fun (l, i, code) (p, s) ->
+                                                     let lFalse, jmp = if i = n then lastL, []
+                                                                       else labelGen#get, [JMP lastL] in
+                                                     let _, pCode = matchPattern lFalse 0 p in
+                                                     let sBody, _ = compileWithLabels (Stmt.Seq (s, Stmt.Leave)) lastL in
+                                                     let amLabel = match l with Some x -> [LABEL x; DUP] | None -> [] in
+                                                     (Some lFalse, i + 1, (amLabel @ pCode @ makeBindings p @ [DROP; ENTER (List.rev (Stmt.Pattern.vars p))] @ sBody @ jmp) :: code)
+                                                   ) (None, 0, []) bs in
+                                expr e @ [DUP] @ List.flatten @@ List.rev code, true
   | Stmt.Skip                -> [], false
 
 let compileP p =
