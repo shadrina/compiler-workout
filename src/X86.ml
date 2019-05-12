@@ -95,6 +95,9 @@ let show instr =
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
+(* Opening Language to use MyUtils *)
+open Language
+
 (* Symbolic stack machine evaluator
 
      compile : env -> prg -> env * instr list
@@ -113,7 +116,7 @@ module M = Map.Make (String)
 (* Environment implementation *)
 class env =
   let chars          = "_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNJPQRSTUVWXYZ" in
-  let make_assoc l i = List.combine l (List.init (List.length l) (fun x -> x + i)) in
+  let make_assoc l i = List.combine l (MyUtils.initList (List.length l) (fun x -> x + i)) in
   let rec assoc  x   = function [] -> raise Not_found | l :: ls -> try List.assoc x l with Not_found -> assoc x ls in
   object (self)
     val globals     = S.empty (* a set of global variables         *)
@@ -256,7 +259,7 @@ class env =
    the stack code, then generates x86 assember code, then prints the assembler file
 *)
 let genasm (ds, stmt) =
-  let stmt = Language.Stmt.Seq (stmt, Language.Stmt.Return (Some (Language.Expr.Call ("raw", [Language.Expr.Const 0])))) in
+  let stmt = Stmt.Seq (stmt, Stmt.Return (Some (Expr.Call ("raw", [Expr.Const 0])))) in
   let env, code =
     compile
       (new env)
