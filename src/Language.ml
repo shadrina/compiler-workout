@@ -427,7 +427,7 @@ module Stmt =
         | caseStmt
 	| "skip" {Skip};
       call:
-          fName:IDENT "(" argsE:(!(Expr.parse))* ")" {Call (fName, argsE)};
+          fName:IDENT "(" argsE:!(Util.list0 Expr.parse) ")" {Call (fName, argsE)};
       returnStmt:
           "return" e:!(Expr.parse)? {Return e};
       stmt:
