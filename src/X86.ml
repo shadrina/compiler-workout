@@ -119,6 +119,8 @@ let compile env code =
     let box i = [Sal1 i; Or1 i] in
     let unbox i = [Sar1 i] in
     let on_stack = function S _ -> true | _ -> false in
+    let correct_move fr t = if on_stack fr && on_stack t then [Mov (fr, eax); Mov (eax, t)]
+                            else [Mov (fr, t)] in
     let call env f n p =
       let f =
         match f.[0] with '.' -> "B" ^ String.sub f 1 (String.length f - 1) | _ -> f
@@ -139,6 +141,7 @@ let compile env code =
           let pushs      =
             match f with
             | "Barray" -> List.rev @@ (Push (L n))     :: pushs
+            | "Bsexp"  -> List.rev @@ (Push (L n))     :: pushs
             | "Bsta"   ->
                let x::v::is = List.rev pushs in               
                is @ [x; v] @ [Push (L (n-2))]
@@ -164,11 +167,9 @@ let compile env code =
              (env, Mov (M ("$" ^ s), l) :: call)
 
           | SEXP (t, n) ->
-             let tag   , env = env#allocate in
-             let argsSz, env = env#allocate in
-             let env, call = call env ".sexp" (n+2) false in
-             (* Tag at the end? *)
-             (env, [Mov (L (n+1), argsSz)] @ call @ [Mov (L (env#hash t), tag)])
+             let s, env = env#allocate in
+             let env, call = call env ".sexp" (n+1) false in
+             (env, [Mov (L (env#hash t), s)] @ call)
              
 	  | LD x ->
              let s, env' = (env#global x)#allocate in
@@ -287,6 +288,44 @@ let compile env code =
                | "raw"   -> "Lraw"
                | _ -> f in
              call env f n p
+
+          | DROP ->
+             let _, env = env#pop in
+             env, []
+
+          | DUP ->
+             let s = env#peek in
+             let s', env = env#allocate in
+             env, correct_move s s'
+
+          | SWAP ->
+             let x, y = env#peek2 in
+             env, [Push x; Push y; Pop x; Pop y]
+
+          | TAG t ->
+             let s, env = env#allocate in
+             let env, code = call env ".tag" 2 false in
+             env, [Mov (L env#hash t, s)] @ code
+             
+          | ENTER xs ->
+             let env, code = List.fold_left
+                               (fun (env, code) v ->
+                                 let s, env = env#pop in
+                                 let l = env#loc v in
+                                 let code' = correct_move s l in
+                                 env, code' :: code
+                               ) (env#scope @@ List.rev xs, []) xs in
+             env, List.flatten @@ List.rev code
+             
+          | LEAVE ->
+             env#unscope, []
+            
+          | ZJMPDROP (l_false, d) ->
+             let env = env#set_cleaned_stack l_false d in
+             let s, env = env#pop in
+             env, unbox s @
+                    [Binop ("cmp", L 1, s);
+                     CJmp  ("nz", l_false);]
         in
         let env'', code'' = compile' env' scode' in
 	env'', code' @ code''
@@ -341,6 +380,11 @@ class env =
                             
     (* associates a stack to a label *)
     method set_stack l = (*Printf.printf "Setting stack for %s\n" l;*) {< stackmap = M.add l stack stackmap >}
+
+    (* associates a  *)
+    method set_cleaned_stack l n =
+      let _, rest = split n stack in
+      {< stackmap = M.add l rest stackmap >}
                                
     (* retrieves a stack for a label *)
     method retrieve_stack l = (*Printf.printf "Retrieving stack for %s\n" l;*)
