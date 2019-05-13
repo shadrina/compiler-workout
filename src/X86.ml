@@ -305,7 +305,7 @@ let compile env code =
           | TAG t ->
              let s, env = env#allocate in
              let env, code = call env ".tag" 2 false in
-             env, [Mov (L env#hash t, s)] @ code
+             env, [Mov (L (env#hash t), s)] @ code
              
           | ENTER xs ->
              let env, code = List.fold_left
@@ -321,9 +321,8 @@ let compile env code =
              env#unscope, []
             
           | ZJMPDROP (l_false, d) ->
-             let env = env#set_cleaned_stack l_false d in
              let s, env = env#pop in
-             env, unbox s @
+             env#set_cleaned_stack l_false d, unbox s @
                     [Binop ("cmp", L 1, s);
                      CJmp  ("nz", l_false);]
         in
