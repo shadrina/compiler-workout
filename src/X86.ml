@@ -162,6 +162,13 @@ let compile env code =
              let l, env = env#allocate in
              let env, call = call env ".string" 1 false in
              (env, Mov (M ("$" ^ s), l) :: call)
+
+          | SEXP (t, n) ->
+             let tag   , env = env#allocate in
+             let argsSz, env = env#allocate in
+             let env, call = call env ".sexp" (n+2) false in
+             (* Tag at the end? *)
+             (env, [Mov (L (n+1), argsSz)] @ call @ [Mov (L (env#hash t), tag)])
              
 	  | LD x ->
              let s, env' = (env#global x)#allocate in
@@ -248,13 +255,13 @@ let compile env code =
                  else [Binop (op, x, y)]
             ) @ box y
              
-          | LABEL s     -> env#retrieve_stack s, [Label s]
+          | LABEL s     -> (if env#is_barrier then (env#drop_barrier)#retrieve_stack s else env), [Label s]
                          
-	  | JMP   l     -> env, [Jmp l]
+	  | JMP   l     -> (env#set_stack l)#set_barrier, [Jmp l]
                          
           | CJMP (s, l) ->
               let x, env = env#pop in
-              env, unbox x @ [Binop ("cmp", L 0, x); CJmp  (s, l)]
+              env#set_stack l, unbox x @ [Binop ("cmp", L 0, x); CJmp  (s, l)]
                      
           | BEGIN (f, a, l) ->
              let env = env#enter f a l in
