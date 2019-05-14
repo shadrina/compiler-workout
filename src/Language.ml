@@ -38,7 +38,7 @@ module MyUtils =
       | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)
 
   end
-   
+
 (* Values *)
 module Value =
   struct
@@ -67,7 +67,17 @@ module Value =
     | _ -> failwith "symbolic expression expected"
 
     let update_string s i x = Bytes.set s i x; s 
-    let update_array  a i x = a.(i) <- x; a
+    let update_array  a i x = a.(i) <- x; a                                       
+
+    let rec string_val v = match v with
+      | (String bytes as str) -> Printf.sprintf "\"%s\"" (Bytes.to_string bytes)
+      | (Int n)               -> string_of_int n
+      | (Array e)             ->
+        let e = String.concat ", " (List.map string_val (Array.to_list e)) in
+        Printf.sprintf "[%s]" e
+      | (Sexp (name, e))      -> if (List.length e != 0)
+                                 then let e = String.concat ", " (List.map string_val e) in Printf.sprintf "`%s (%s)" name e
+                                 else Printf.sprintf "`%s" name
                       
   end
        
@@ -144,7 +154,7 @@ module Builtin =
     let eval (st, i, o, _) args = function
     | "read"     -> (match i with z::i' -> (st, i', o, Some (Value.of_int z)) | _ -> failwith "Unexpected end of input")
     | "write"    -> (st, i, o @ [Value.to_int @@ List.hd args], None)
-    | ".elem"    -> let [b; j] = args in
+    | ".elem"    -> let [j; b] = args in
                     (st, i, o, let i = Value.to_int j in
                                Some (match b with
                                      | Value.String   s  -> Value.of_int @@ Char.code (Bytes.get s i)
@@ -152,21 +162,22 @@ module Builtin =
                                      | Value.Sexp (_, a) -> List.nth a i
                                      | _                 -> failwith "hm"
                                )
-                    )         
+                    ) 
     | ".length"     -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Sexp (_, a) -> List.length a | Value.Array a -> Array.length a | Value.String s -> Bytes.length s)))
     | ".array"      -> (st, i, o, Some (Value.of_array @@ Array.of_list args))
-    | ".string"     -> let stringify v = Some (Value.String (Bytes.of_string v)) in
-                       let rec convert v = match v with
-                         | (Value.String bytes) -> Printf.sprintf "\"%s\"" (Bytes.to_string bytes)
-                         | (Value.Int num) -> string_of_int num
-                         | (Value.Array elems) -> let elemsStr = String.concat ", " (List.map convert (Array.to_list elems)) in Printf.sprintf "[%s]" elemsStr
-                         | (Value.Sexp (t, args)) ->
-                            if (List.length args != 0) then let argsStr = String.concat ", " (List.map convert args) in Printf.sprintf "`%s (%s)" t argsStr
-                            else Printf.sprintf "`%s" t
-                       in (st, i, o, stringify (convert (List.hd args)))
+    | ".string" | ".stringval" ->
+         let stringify v = Some (Value.String (Bytes.of_string v)) in
+         let rec convert v = match v with
+           | (Value.String bytes) -> Printf.sprintf "\"%s\"" (Bytes.to_string bytes)
+           | (Value.Int num) -> string_of_int num
+           | (Value.Array elems) -> let elemsStr = String.concat ", " (List.map convert (Array.to_list elems)) in Printf.sprintf "[%s]" elemsStr
+           | (Value.Sexp (t, args)) ->
+              if (List.length args != 0) then let argsStr = String.concat ", " (List.map convert args) in Printf.sprintf "`%s (%s)" t argsStr
+              else Printf.sprintf "`%s" t
+         in (st, i, o, stringify (convert (List.hd args)))
     | "isArray"  -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.Array  _ -> 1 | _ -> 0))
-    | "isString" -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.String _ -> 1 | _ -> 0))                     
-       
+    | "isString" -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.String _ -> 1 | _ -> 0))
+                                    
   end
     
 (* Simple expressions: syntax and semantics *)
@@ -185,7 +196,8 @@ module Expr =
     (* binary operator    *) | Binop  of string * t * t
     (* element extraction *) | Elem   of t * t
     (* length             *) | Length of t 
-    (* function call      *) | Call   of string * t list with show
+    (* function call      *) | Call   of string * t list
+    (* string conversion  *) | StringVal of t with show
 
     (* Available binary operators:
         !!                   --- disjunction
@@ -221,13 +233,12 @@ module Expr =
       | Binop (op, x, y) -> let ((st, i, o, Some a) as conf') = eval env conf x in
                             let (st, i, o, Some b) = eval env conf' y in
                             (st, i, o, Some (Value.of_int @@ MyUtils.toFunc op (Value.to_int a) (Value.to_int b)))
-      | Elem (a, i)      -> let (st, i, o, v) = eval_list env conf [a; i] in env#definition env ".elem" v (st, i, o, None)
+      | Elem (a, i)      -> let (st, i, o, v) = eval_list env conf [i; a] in env#definition env ".elem" v (st, i, o, None)
       | Length n         -> let (st, i, o, v) = eval_list env conf [n] in env#definition env ".length" v (st, i, o, None)
-      | Call (fName, argsE) -> let (st', i', o', args) = List.fold_left (fun (st, i, o, args) e ->
-                                                                          let ((st, i, o, Some r) as conf') = eval env (st, i, o, None) e in
-                                                                          (st, i, o, args @ [r])
-                                                                        ) (st, i, o, []) argsE in 
-                               env#definition env fName args (st', i', o', None)
+      | StringVal expr   -> let st, i, o, Some value = eval env conf expr
+                            in env#definition env ".stringval" [value] (st, i, o, None)
+      | Call (fName, argsE) -> let st, i, o, args = eval_list env conf argsE in
+                               env#definition env fName args (st, i, o, None)
     and eval_list env conf xs =
       let vs, (st, i, o, _) =
         List.fold_left
@@ -270,7 +281,7 @@ module Expr =
             | Some x -> Length elements
             | None   -> elements in
           match s with
-            | Some x -> Call (".string", [withLSuffix])
+            | Some x -> StringVal withLSuffix
             | None   -> withLSuffix
         };
       base:

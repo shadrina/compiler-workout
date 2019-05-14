@@ -138,7 +138,7 @@ static void printValue (void *p) {
   }
 }
 
-extern void* Belem (void *p, int i) {
+extern void* Belem (int i, void *p) {
   data *a = TO_DATA(p);
   i = UNBOX(i);
   
@@ -202,14 +202,13 @@ extern void* Bsexp (int n, ...) {
   d->tag = SEXP_TAG | (n-1);
   
   va_start(args, n);
+  r->tag = va_arg(args, int);
   
   for (i=0; i<n-1; i++) {
     int ai = va_arg(args, int);
     //printf ("arg %d = %x\n", i, ai);
     ((int*)d->contents)[i] = ai; 
   }
-
-  r->tag = va_arg(args, int);
   va_end(args);
 
   //printf ("tag %d\n", r->tag);
@@ -218,17 +217,17 @@ extern void* Bsexp (int n, ...) {
   return d->contents;
 }
 
-extern int Btag (void *d, int t) {
+extern int Btag (int t, void *d) {
   data *r = TO_DATA(d);
   return BOX(TAG(r->tag) == SEXP_TAG && TO_SEXP(d)->tag == t);
 }
-		 
-extern void Bsta (int n, int v, void *s, ...) {
+
+extern void Bsta (int n, void *s, int v, ...) {
   va_list args;
   int i, k;
   data *a;
-  
-  va_start(args, s);
+
+  va_start(args, v);
 
   for (i=0; i<n-1; i++) {
     k = UNBOX(va_arg(args, int));
@@ -237,7 +236,7 @@ extern void Bsta (int n, int v, void *s, ...) {
 
   k = UNBOX(va_arg(args, int));
   a = TO_DATA(s);
-  
+
   if (TAG(a->tag) == STRING_TAG)((char*) s)[k] = (char) UNBOX(v);
   else ((int*) s)[k] = v;
 }
@@ -288,7 +287,7 @@ extern void Lfclose (FILE *f) {
 extern int Lread () {
   int result;
 
-  printf ("> "); 
+  printf ("> ");
   fflush (stdout);
   scanf  ("%d", &result);
 

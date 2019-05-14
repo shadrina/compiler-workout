@@ -49,7 +49,7 @@ let split n l =
   | n -> let h::tl = rest in unzip (h::taken, tl) (n-1)
   in
   unzip ([], l) n
-          
+
 let rec eval env (controlSt, st, ((s, i, o) as config)) p =
   let instrEval instr = match instr with
     | BINOP op -> (match st with
@@ -57,16 +57,16 @@ let rec eval env (controlSt, st, ((s, i, o) as config)) p =
       | _ -> failwith "Not enough elements in stack")
     | CONST n  -> ((Value.of_int n)::st, config)
     | STRING str -> (Value.of_string str::st, config)
-    | SEXP (t, n)-> let vs, st' = split n st in ((Value.sexp t @@ (List.rev vs))::st', config)
+    | SEXP (t, n)-> let vs, st' = split n st in ((Value.sexp t @@ vs)::st', config)
     | LD x       -> ((State.eval s x)::st, config)
     | ST x       -> (match st with
                       | z::tail -> (tail, ((State.update x z s), i, o))
                       | _       -> failwith "Not enough elements in stack")
     | STA (x, n) -> let ((value::ids), tail) = split (n + 1) st in
-                    let s' = Stmt.update s x value (List.rev ids) in
+                    let s' = Stmt.update s x value ids in
                     (tail, (s', i, o))
     | BEGIN (_, params, locals) -> let vs, st' = split (List.length params) st in
-                                   let s' = List.combine params @@ List.rev vs in
+                                   let s' = List.combine params @@ vs in
                                    (st', (List.fold_left (fun s (x, v) -> State.update x v s) (State.enter s (params @ locals)) s', i, o))
     | LABEL _                   -> (st, config)
     | DROP                      -> (List.tl st, config)
@@ -81,7 +81,7 @@ let rec eval env (controlSt, st, ((s, i, o) as config)) p =
                                    (st', (State.push s (List.fold_left (fun s' (x, v) -> State.bind x v s') State.undefined (List.combine xs vs)) xs, i, o))
     | LEAVE                     -> (st, (State.drop s, i, o)) 
     in match p with
-       | x::xs -> (match x with 
+      | x::xs -> (match x with
         | JMP l -> eval env (controlSt, st, config) (env#labeled l)
         | CJMP (znz, l) -> (match st with
                             | head::tail -> let v = (Value.to_int head) in
@@ -93,15 +93,15 @@ let rec eval env (controlSt, st, ((s, i, o) as config)) p =
                              if Value.to_int z = 0 then let (_,  st'') = split d st' in
                                                         eval env (controlSt, st'', config) (env#labeled l)
                              else eval env (controlSt, st', config) xs
-        | CALL (f, n, fl) -> if env#is_label f then eval env ((xs, s)::controlSt, st, config) (env#labeled f)
-                             else eval env (env#builtin (controlSt, st, config) f n fl) xs
+        | CALL (f, n, p)  -> if env#is_label f then eval env ((xs, s)::controlSt, st, config) (env#labeled f)
+                             else eval env (env#builtin (controlSt, st, config) f n p) xs
         | RET _ | END     -> (match controlSt with
                                 | (p, oldS)::controlSt' -> let s' = State.leave s oldS in
-                                                       eval env (controlSt', st, (s', i, o)) p
+                                                           eval env (controlSt', st, (s', i, o)) p
                                 | _                     -> (controlSt, st, config)
                              )
         | _               -> let (st, config) = instrEval x in eval env (controlSt, st, config) xs)
-      | _ -> (controlSt, st, config)
+       | _      -> (controlSt, st, config)
 
 (* Top-level evaluation
 
@@ -126,7 +126,7 @@ let run p i =
          method builtin (cstack, stack, (st, i, o)) f n p =
            let f = match f.[0] with 'L' -> String.sub f 1 (String.length f - 1) | _ -> f in
            let args, stack' = split n stack in
-           let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) (List.rev args) f in
+           let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) args f in
            let stack'' = if p then stack' else let Some r = r in r::stack' in
            (*Printf.printf "Builtin:\n";*)
            (cstack, stack'', (st, i, o))
@@ -172,34 +172,35 @@ let rec makeBindings p =
   let topElem i = [CONST i; CALL (".elem", 2, false)] in
   let extractBindValue path = [DUP] @ (List.flatten (List.map topElem path)) @ [SWAP] in
   List.flatten (List.map extractBindValue (List.rev (inner p)))
-  
+
 let rec compileWithLabels p lastL =
-  let rec call f args fl =
-    let argsCode = List.flatten @@ List.map expr args in
-    argsCode @ [CALL (f, List.length args, fl)]
+  let rec call f args p =
+    let argsCode = List.flatten @@ (List.rev (List.map expr args)) in
+    argsCode @ [CALL (f, List.length args, p)]
   and expr = function
   | Expr.Var   x          -> [LD x]
   | Expr.Const n          -> [CONST n]
   | Expr.String s         -> [STRING s]
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
-  | Expr.Array xs         -> let compiledXs = List.flatten (List.map expr xs) in
+  | Expr.Array xs         -> let compiledXs = List.flatten (List.rev (List.map expr xs)) in
                              compiledXs @ [CALL (".array", (List.length compiledXs), false)]
-  | Expr.Sexp (t, xs)     -> let compiledXs = List.flatten (List.map expr xs) in
+  | Expr.Sexp (t, xs)     -> let compiledXs = List.flatten (List.rev (List.map expr xs)) in
                              compiledXs @ [SEXP (t, List.length xs)]
   | Expr.Elem (a, i)      -> expr a @ expr i @ [CALL (".elem", 2, false)]
   | Expr.Length n         -> expr n @ [CALL (".length", 1, false)]
   | Expr.Call (fName, argsE) -> call fName argsE false
+  | Expr.StringVal v         -> expr v @ [CALL (".stringval", 1, false)]
   in match p with
+  | Stmt.Assign (x, [], e) -> (expr e @ [ST x]), false
+  | Stmt.Assign (x, is, e) -> List.flatten (List.map expr ((List.rev is) @ [e])) @ [STA (x, List.length is)], false
   | Stmt.Seq (s1, s2)  -> (let newLabel = labelGen#get in
                            let (compiled1, used1) = compileWithLabels s1 newLabel in
                            let (compiled2, used2) = compileWithLabels s2 lastL in
                            (compiled1 @ (if used1 then [LABEL newLabel] else []) @ compiled2), used2)
-  | Stmt.Assign (x, [], e) -> (expr e @ [ST x]), false
-  | Stmt.Assign (x, is, e) -> List.flatten (List.map expr (is @ [e])) @ [STA (x, List.length is)], false
   | Stmt.If (e, s1, s2)    -> let lElse = labelGen#get in
                               let (compiledS1, used1) = compileWithLabels s1 lastL in
-                              let (compiledS2, used2) = compileWithLabels s2 lastL in 
-                              (expr e @ [CJMP ("z", lElse)] 
+                              let (compiledS2, used2) = compileWithLabels s2 lastL in
+                              (expr e @ [CJMP ("z", lElse)]
                                 @ compiledS1 @ (if used1 then [] else [JMP lastL]) @ [LABEL lElse]
                                 @ compiledS2 @ (if used2 then [] else [JMP lastL])), true
   | Stmt.While (e, body)   -> let lCheck = labelGen#get in
