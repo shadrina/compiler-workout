@@ -27,8 +27,12 @@ L__gc_init:		movl	%esp, __gc_stack_bottom
 // if    @__gc_stack_top is equal to 0
 // then  set @__gc_stack_top to %ebp
 // else  return
-__pre_gc:
-			call nimpl
+__pre_gc:		cmpl	$0, __gc_stack_top
+			jnz	__pre_gc_else
+			movl	%ebp, __gc_stack_top
+__pre_gc_else:		ret
+	
+	
 
 // ==================================================
 // if __gc_stack_top was set by one of the callers
