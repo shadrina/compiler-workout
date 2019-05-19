@@ -503,7 +503,7 @@ extern void gc_print_stack_top_bottom (size_t **top, size_t **bottom) {
 //   and, if so, calls @gc_copy for each found root
 extern void gc_test_and_copy_root (size_t ** root) {
   size_t *v = *root;
-  if (!UNBOXED(v) && v >= from_space.begin && v < from_space.end) {
+  if (IS_VALID_HEAP_POINTER(v)) {
     fprintf(stderr, "DEBUG: Points in heap: %p\n", v);
   }
 }
