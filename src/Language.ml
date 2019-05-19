@@ -7,6 +7,18 @@ open GT
 open Ostap
 open Combinators
 
+(* Utils *)
+module MyUtils =
+  struct
+
+  let initList n ~f =
+    let rec initList' i n f =
+      if i >= n then []
+      else (f i) :: (initList' (i+1) n f)
+    in initList' 0 n f
+
+end
+
 (* Values *)
 module Value =
   struct
@@ -34,8 +46,8 @@ module Value =
     | Sexp (t, _) -> t
     | _ -> failwith "symbolic expression expected"
 
-    let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+    let update_string s i x = String.init      (String.length s) (fun j -> if j = i then x else s.[j])
+    let update_array  a i x = MyUtils.initList (List.length a)   (fun j -> if j = i then x else List.nth a j)
                                           
     let string_val v =
       let buf      = Buffer.create 128 in

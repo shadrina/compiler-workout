@@ -8,7 +8,7 @@
 # include <assert.h>
 
 #define NIMPL fprintf (stderr, "Internal error: "			\
-		       "function %s at file %s, line %d is not implemented yet", \
+		       "function %s at file %s, line %d is not implemented yet\n", \
 		       __func__, __FILE__, __LINE__);			\
   exit(1);
 
@@ -404,7 +404,7 @@ extern int Lwrite (int n) {
 /*   of the static data area. They are defined while generating X86 code in src/X86.ml */
 /*   (function genasm). */
 /* 2) Program stack. */
-/*   Globals @__gc_stack_bottom and @__gc_stack_top (see runctime/gc_runtime.s) have to be set */
+/*   Globals @__gc_stack_bottom and @__gc_stack_top (see runtime/gc_runtime.s) have to be set */
 /*   as the begin and the end of program stack or its part where roots can be found. */
 /* 3) Traditionally, roots can be also found in registers but our compiler always saves all */
 /*   registers on program stack before any external function call. */
@@ -419,11 +419,11 @@ extern int Lwrite (int n) {
 // The begin and the end of static area (are specified in src/X86.ml fucntion genasm)
 extern const size_t __gc_data_end, __gc_data_start;
 
-// @L__gc_init is defined in runtime/runtime.s
+// @L__gc_init is defined in runtime/gc_runtime.s
 //   it sets up stack bottom and calls init_pool
 //   it is called from the main function (see src/X86.ml function genasm)
 extern void L__gc_init ();
-// @__gc_root_scan_stack (you have to define it in runtime/runtime.s)
+// @__gc_root_scan_stack (you have to define it in runtime/gc_runtime.s)
 //   finds roots in program stack and calls @gc_test_and_copy_root for each found root
 extern void __gc_root_scan_stack ();
 
@@ -500,10 +500,37 @@ extern void gc_root_scan_data (void) { NIMPL }
 
 // @init_pool is a memory pools initialization function
 //   (is called by L__gc_init from runtime/gc_runtime.s)
-extern void init_pool (void) { NIMPL }
+extern void init_pool (void) {
+  size_t *from_space_allocated = (size_t*)mmap(NULL, SPACE_SIZE, PROT_READ | PROT_WRITE,
+					       MAP_PRIVATE | MAP_32BIT | MAP_ANONYMOUS, -1, 0);
+  size_t *to_space_allocated   = (size_t*)mmap(NULL, SPACE_SIZE, PROT_READ | PROT_WRITE,
+					       MAP_PRIVATE | MAP_32BIT | MAP_ANONYMOUS, -1, 0);
+  if (from_space_allocated == MAP_FAILED || to_space_allocated == MAP_FAILED) {
+    fprintf(stderr, "ERROR: Error while allocating memory for pool\n");
+    exit(1);
+  }
+
+  fprintf(stderr, "DEBUG: Successfully allocated pool...\n");
+  
+  from_space.begin   = from_space_allocated;
+  from_space.end     = from_space_allocated + SPACE_SIZE;
+  from_space.current = from_space_allocated;
+  from_space.size    = SPACE_SIZE;
+
+  to_space.begin   = to_space_allocated;
+  to_space.end     = to_space_allocated + SPACE_SIZE;
+  to_space.current = to_space_allocated;
+  to_space.size    = SPACE_SIZE;
+}
 
 // @free_pool frees memory pool p
-static int free_pool (pool * p) { NIMPL }
+static int free_pool (pool * p) {
+  if (munmap((void*)p->begin, p->size) == -1) {
+    fprintf(stderr, "ERROR: Error while freeing memory for pool\n");
+    exit(1);
+  }
+  fprintf(stderr, "DEBUG: Successfully freed pool...\n");
+}
 
 // @gc performs stop-the-world mark-and-copy garbage collection
 //   and extends pools (i.e. calls @extend_spaces) if necessarily
@@ -515,10 +542,24 @@ static int free_pool (pool * p) { NIMPL }
 //   2) call @__gc_root_scan_stack (finds roots in program stack
 //        and calls @gc_test_and_copy_root for each found root)
 //   3) extends spaces if there is not enough space to be allocated after gc
-static void * gc (size_t size) { NIMPL }
+static void * gc (size_t size) {
+  // gc_root_scan_data();
+  __gc_root_scan_stack();
+  // extend spaces if needed...
+}
 
 // @alloc allocates @size memory words
-//   it enaibles garbage collection if out-of-memory,
+//   it enables garbage collection if out-of-memory,
 //   i.e. calls @gc when @current + @size > @from_space.end
 // returns a pointer to the allocated block of size @size
-extern void * alloc (size_t size) { NIMPL }
+extern void * alloc (size_t size) {
+  if (from_space.current + size < from_space.end) {
+    fprintf(stderr, "DEBUG: Allocate %d...\n", size);
+    void *p = (void*)from_space.current;
+    from_space.current += size;
+    return p;
+  } else {
+    fprintf(stderr, "DEBUG: Cannot allocate %d, calling gc...\n", size);
+    return gc(size);
+  }
+}
