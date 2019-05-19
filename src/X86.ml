@@ -196,15 +196,15 @@ let compile env code =
 	         )
 
           | BINOP op ->
-	         let x, y, env' = env#pop2 in
+	     let x, y, env' = env#pop2 in
              env'#push y,
-             unbox x @ unbox y @ (match op with
-	           | "/" | "%" ->
-                 [Mov (y, eax);
+             (match op with
+	       | "/" | "%" ->
+                 unbox x @ unbox y @ [Mov (y, eax);
                   Cltd;
                   IDiv x;
                   Mov ((match op with "/" -> eax | _ -> edx), y)
-                 ]
+                 ] @ box y
                | "<" | "<=" | "==" | "!=" | ">=" | ">" ->
                  (match x with
                   | M _ | S _ ->
@@ -220,37 +220,38 @@ let compile env code =
                       Set   (suffix op, "%al");
                       Mov   (eax, y)
                      ]
-                 )
+                 ) @ box y
                | "*" ->
-                 if on_stack x && on_stack y then [Mov (y, eax); Binop (op, x, eax); Mov (eax, y)]
-                 else [Binop (op, x, y)]
-	           | "&&" ->
-	             [Mov   (x, eax);
-	              Binop (op, x, eax);
-	              Mov   (L 0, eax);
-	              Set   ("ne", "%al");
+                 unbox x @ unbox y @
+                 (if on_stack x && on_stack y then [Mov (y, eax); Binop (op, x, eax); Mov (eax, y)]
+                 else [Binop (op, x, y)]) @ box y
+	       | "&&" ->
+	         unbox x @ unbox y @ [Mov   (x, eax);
+	          Binop (op, x, eax);
+	          Mov   (L 0, eax);
+	          Set   ("ne", "%al");
 
-	              Mov   (y, edx);
-	              Binop (op, y, edx);
-	              Mov   (L 0, edx);
-	              Set   ("ne", "%dl");
+	          Mov   (y, edx);
+	          Binop (op, y, edx);
+	          Mov   (L 0, edx);
+	          Set   ("ne", "%dl");
                   
                   Binop (op, edx, eax);
                   Set   ("ne", "%al");
 
                   Mov   (eax, y)
-                 ]	   
-	           | "!!" ->
-		         [Mov   (y, eax);
-		          Binop (op, x, eax);
+                 ] @ box y	   
+	       | "!!" ->
+		 unbox x @ unbox y @ [Mov   (y, eax);
+		  Binop (op, x, eax);
                   Mov   (L 0, eax);
-		          Set   ("ne", "%al");
-		          Mov   (eax, y)
-                 ]	   
-	           | _   ->
-                 if on_stack x && on_stack y then [Mov   (x, eax); Binop (op, eax, y)]
-                 else [Binop (op, x, y)]
-             ) @ box y
+		  Set   ("ne", "%al");
+		  Mov   (eax, y)
+                 ] @ box y
+	       | _   ->
+                 (if on_stack x && on_stack y then [Mov (x, eax); Binop (op, eax, y)]
+                  else [Binop (op, x, y)]) @ (if op = "+" then [Dec y] else [Binop ("+", L 1, y)])
+             )
 
           | LABEL s ->
              (if env#is_barrier then (env#drop_barrier)#retrieve_stack s else env), [Label s]
@@ -280,11 +281,16 @@ let compile env code =
              else env, [Jmp env#epilogue]
 
           | CALL (f, n, p) ->
-             let f = match f with
-               | "write" -> "Lwrite"
-               | "read"  -> "Lread"
-               | "raw"   -> "Lraw"
-               | _ -> f in
+             let stdlib = [
+                 "raw";
+                 "printf"; "fprintf";
+                 "fopen"; "fclose";
+                 "read"; "write";
+                 "strcat"
+             ] in
+             let f = if List.exists (fun s -> f = s) stdlib
+                     then "L" ^ f
+                     else f in
              call env f n p
 
           | DROP ->
@@ -307,9 +313,9 @@ let compile env code =
 
           | ENTER xs ->
              let env, code = List.fold_left
-                               (fun (env, code) v ->
+                               (fun (env, code) name ->
                                  let s, env = env#pop in
-                                 let l = env#loc v in
+                                 let l = env#loc name in
                                  let code' = correct_move s l in
                                  env, code' :: code
                                ) (env#scope @@ List.rev xs, []) xs in
