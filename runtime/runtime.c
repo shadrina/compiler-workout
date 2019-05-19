@@ -119,10 +119,12 @@ static void printValue (void *p) {
 
     switch (TAG(a->tag)) {      
     case STRING_TAG:
+      fprintf(stderr, "DEBUG: String!\n");
       printStringBuf ("\"%s\"", a->contents);
       break;
       
     case ARRAY_TAG:
+      fprintf(stderr, "DEBUG: Array!\n");
       printStringBuf ("[");
       for (i = 0; i < LEN(a->tag); i++) {
         printValue ((void*)((int*) a->contents)[i]);
@@ -132,6 +134,7 @@ static void printValue (void *p) {
       break;
       
     case SEXP_TAG:
+      fprintf(stderr, "DEBUG: Sexp!\n");
       printStringBuf ("`%s", de_hash (TO_SEXP(p)->tag));
       if (LEN(a->tag)) {
 	printStringBuf (" (");
@@ -144,6 +147,7 @@ static void printValue (void *p) {
       break;
       
     default:
+      fprintf(stderr, "DEBUG: Invalid tag!\n");
       printStringBuf ("*** invalid tag: %p ***", TAG(a->tag));
     }
   }
@@ -490,9 +494,19 @@ static void extend_spaces (void) { NIMPL }
 //   , rests a forward pointer, and returns new object location.
 extern size_t * gc_copy (size_t *obj) { NIMPL }
 
+extern void gc_print_stack_top_bottom (size_t **top, size_t **bottom) {
+  fprintf(stderr, "DEBUG: Stack top:    %p\n", top);
+  fprintf(stderr, "DEBUG: Stack bottom: %p\n", bottom);
+}
+
 // @gc_test_and_copy_root checks if pointer is a root (i.e. valid heap pointer)
 //   and, if so, calls @gc_copy for each found root
-extern void gc_test_and_copy_root (size_t ** root) { NIMPL }
+extern void gc_test_and_copy_root (size_t ** root) {
+  size_t *v = *root;
+  if (!UNBOXED(v) && v >= from_space.begin && v < from_space.end) {
+    fprintf(stderr, "DEBUG: Points in heap: %p\n", v);
+  }
+}
 
 // @gc_root_scan_data scans static area for root
 //   for each root it calls @gc_test_and_copy_root
@@ -521,6 +535,8 @@ extern void init_pool (void) {
   to_space.end     = to_space_allocated + SPACE_SIZE;
   to_space.current = to_space_allocated;
   to_space.size    = SPACE_SIZE;
+
+  fprintf(stderr, "DEBUG: From space range: [%p, %p]\n", from_space.begin, from_space.end);
 }
 
 // @free_pool frees memory pool p
@@ -543,8 +559,11 @@ static int free_pool (pool * p) {
 //        and calls @gc_test_and_copy_root for each found root)
 //   3) extends spaces if there is not enough space to be allocated after gc
 static void * gc (size_t size) {
+  // from_space.begin = to_space.begin;
   // gc_root_scan_data();
+  __pre_gc();
   __gc_root_scan_stack();
+  __post_gc();
   // extend spaces if needed...
 }
 
@@ -554,12 +573,12 @@ static void * gc (size_t size) {
 // returns a pointer to the allocated block of size @size
 extern void * alloc (size_t size) {
   if (from_space.current + size < from_space.end) {
-    fprintf(stderr, "DEBUG: Allocate %d...\n", size);
     void *p = (void*)from_space.current;
     from_space.current += size;
+    fprintf(stderr, "DEBUG: Allocate from %p %d words...\n", p, size);
     return p;
   } else {
-    fprintf(stderr, "DEBUG: Cannot allocate %d, calling gc...\n", size);
+    fprintf(stderr, "DEBUG: Cannot allocate %d words, calling gc...\n", size);
     return gc(size);
   }
 }
