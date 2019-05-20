@@ -393,7 +393,7 @@ extern int Lwrite (int n) {
 
 /* The section implements stop-the-world mark-and-copy garbage collection. */
 /* Formally, it consists of 4 stages: */
-/* 1. Root set constraction */
+/* 1. Root set construction */
 /* 2. Mark phase */
 /*   I.e. marking each reachable from the root set via a chain of pointers object as alive. */
 /* 3. Copy */
@@ -492,7 +492,9 @@ static void extend_spaces (void) { NIMPL }
 // @gc_copy takes a pointer to an object, copies it
 //   (i.e. moves from from_space to to_space)
 //   , rests a forward pointer, and returns new object location.
-extern size_t * gc_copy (size_t *obj) { NIMPL }
+extern size_t * gc_copy (size_t *obj) {
+  
+}
 
 extern void gc_print_stack_top_bottom (size_t **top, size_t **bottom) {
   fprintf(stderr, "DEBUG: Stack top:    %p\n", top);
@@ -505,6 +507,7 @@ extern void gc_test_and_copy_root (size_t ** root) {
   size_t *v = *root;
   if (IS_VALID_HEAP_POINTER(v)) {
     fprintf(stderr, "DEBUG: Points in heap: %p\n", v);
+    gc_copy(v);
   }
 }
 
@@ -559,10 +562,10 @@ static int free_pool (pool * p) {
 //        and calls @gc_test_and_copy_root for each found root)
 //   3) extends spaces if there is not enough space to be allocated after gc
 static void * gc (size_t size) {
-  // from_space.begin = to_space.begin;
   // gc_root_scan_data();
   __pre_gc();
   __gc_root_scan_stack();
+  fprintf(stderr, "Calling __post_gc()...\n");
   __post_gc();
   // extend spaces if needed...
 }

@@ -44,9 +44,7 @@ __post_gc:		movl	$0, __gc_stack_top
 // Scan stack for roots
 // strting from __gc_stack_top
 // till __gc_stack_bottom
-__gc_root_scan_stack:	pushl	%ebp
-			movl	%esp, %ebp
-__gc_root_scan_stack_p:	pushl	__gc_stack_bottom
+__gc_root_scan_stack:	pushl	__gc_stack_bottom
 			pushl	__gc_stack_top
 			call	gc_print_stack_top_bottom
 			addl	$8, %esp
@@ -57,6 +55,4 @@ __gc_root_scan_stack_l:	pushl	%ebx
 			addl	$4, %ebx
 __gc_root_scan_stack_c:	cmpl	%ebx, __gc_stack_bottom
 			jne	__gc_root_scan_stack_l
-			movl	%ebp, %esp
-			popl	%ebp
 			ret
