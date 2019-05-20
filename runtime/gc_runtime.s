@@ -38,9 +38,10 @@ __pre_gc_else:		ret
 // if __gc_stack_top was set by one of the callers
 // then return
 // else set __gc_stack_top to 0
-__post_gc:		cmpl	%esp, __gc_stack_top
-			jne	__post_gc_else	
-			movl	$0, __gc_stack_top
+__post_gc:
+			//cmpl	%esp, __gc_stack_top
+			//jne	__post_gc_else	
+			//movl	$0, __gc_stack_top
 __post_gc_else:		ret
 
 // ==================================================
@@ -52,7 +53,7 @@ __gc_root_scan_stack:	pushl	%ebx
 			pushl	__gc_stack_top
 			call	debug_print_stack_top_bottom
 			addl	$8, %esp
-			movl	__gc_stack_top, %ebx
+__gc_root_scan_stack_b:	movl	__gc_stack_top, %ebx
 __gc_root_scan_stack_l:	pushl	%ebx
 			call	gc_test_and_copy_root
 			addl	$4, %esp

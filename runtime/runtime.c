@@ -508,7 +508,14 @@ extern size_t * gc_copy (size_t *obj);
 //   1) copies @len words from @from to @where
 //   2) calls @gc_copy for those of these words which are valid pointers to from_space
 static void copy_elements (size_t *where, size_t *from, int len) {
-  
+  for (int i = 0; i < len; ++i) {
+    // if (IS_VALID_HEAP_POINTER(from + i)) {
+    //   fprintf(stderr, "DEBUG: Valid heap pointer inside object!\n");
+    //   gc_copy(from + i);
+    // } else {
+      where[i] = from[i];
+    // }
+  }
 }
 
 // @extend_spaces extends size of both from- and to- spaces
@@ -530,23 +537,44 @@ static void extend_spaces (void) {
 }
 
 // @gc_copy takes a pointer to an object, copies it
-//   (i.e. moves from from_space to to_space)
-//   , rests a forward pointer, and returns new object location.
+// (i.e. moves from from_space to to_space)
+// , rests a forward pointer, and returns new object location.
 extern size_t * gc_copy (size_t *obj) {
   data *d = TO_DATA(obj);
-  switch (TAG(d->tag)) {      
+  size_t *to_ptr = to_space.current;
+  
+  switch (TAG(d->tag)) {
+    
     case STRING_TAG:
       fprintf(stderr, "DEBUG: String! Length: %zu\n", LEN(d->tag));
-      break;     
+      break;
+      
     case ARRAY_TAG:
       fprintf(stderr, "DEBUG: Array!  Length: %zu\n", LEN(d->tag));
       break;
+      
     case SEXP_TAG:
       fprintf(stderr, "DEBUG: Sexp!   Length: %zu\n", LEN(d->tag));
+      *to_space.current = TO_SEXP(obj)->tag;
+      to_space.current += sizeof(int);
       break;
+      
     default:
-      fprintf(stderr, "DEBUG: Invalid tag!\n");
+      fprintf(stderr, "ERROR: Invalid tag!\n");
+      exit(1);
   }
+
+  // Copying object
+  *to_space.current = d->tag;
+  to_space.current += sizeof(int);
+  copy_elements(to_space.current, obj, LEN(d->tag));
+  to_space.current += LEN(d->tag);
+
+  // Rest forward pointer
+  *obj = to_ptr;
+
+  // Return new object location
+  return to_ptr;
 }
 
 extern void debug_print_value(size_t **v) {
@@ -559,7 +587,7 @@ extern void debug_print_stack_top_bottom (size_t **top, size_t **bottom) {
 }
 
 // @gc_test_and_copy_root checks if pointer is a root (i.e. valid heap pointer)
-//   and, if so, calls @gc_copy for each found root
+// and, if so, calls @gc_copy for each found root
 extern void gc_test_and_copy_root (size_t ** root) {
   size_t *v = *root;
   if (IS_VALID_HEAP_POINTER(v)) {
@@ -570,7 +598,7 @@ extern void gc_test_and_copy_root (size_t ** root) {
 }
 
 // @gc_root_scan_data scans static area for root
-//   for each root it calls @gc_test_and_copy_root
+// for each root it calls @gc_test_and_copy_root
 extern void gc_root_scan_data (void) {
   size_t *p = &__gc_data_start;
   while (p != &__gc_data_end) {
@@ -580,7 +608,7 @@ extern void gc_root_scan_data (void) {
 }
 
 // @init_pool is a memory pools initialization function
-//   (is called by L__gc_init from runtime/gc_runtime.s)
+// (is called by L__gc_init from runtime/gc_runtime.s)
 extern void init_pool (void) {
   from_space.begin = (size_t*)mmap(NULL, SPACE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
 				   MAP_PRIVATE | MAP_32BIT | MAP_ANONYMOUS, -1, 0);
@@ -624,10 +652,11 @@ static int free_pool (pool * p) {
 //        and calls @gc_test_and_copy_root for each found root)
 //   3) extends spaces if there is not enough space to be allocated after gc
 static void * gc (size_t size) {
+  fprintf(stderr, "DEBUG: Scanning static area...\n");
   gc_root_scan_data();
+  fprintf(stderr, "DEBUG: Scanning stack...\n");
   __gc_root_scan_stack();
-  fprintf(stderr, "DEBUG: Scanned roots...\n");
-  
+  fprintf(stderr, "DEBUG: Finish scanning roots...\n");
   NIMPL
 }
 
