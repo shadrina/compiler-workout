@@ -1,5 +1,7 @@
 /* Runtime library */
 
+#define _GNU_SOURCE
+
 # include <stdio.h>
 # include <string.h>
 # include <stdarg.h>
@@ -39,6 +41,10 @@ typedef struct {
 } sexp; 
 
 extern void* alloc (size_t);
+// @__pre_gc  sets up @__gc_stack_top if it is not set yet
+extern void __pre_gc  ();
+// @__post_gc sets @__gc_stack_top to zero if it was set by the caller
+extern void __post_gc ();
 
 extern int Blength (void *p) {
   data *a = (data*) BOX (NULL);
@@ -169,11 +175,15 @@ extern void* Bstring (void *p) {
   int n   = BOX(0);
   data *r = NULL;
 
+  __pre_gc();
+
   n = strlen (p);
   r = (data*) alloc (n + 1 + sizeof (int));
 
   r->tag = STRING_TAG | (n << 3);
   strncpy (r->contents, p, n + 1);
+
+  __post_gc();
   
   return r->contents;
 }
@@ -181,12 +191,16 @@ extern void* Bstring (void *p) {
 extern void* Bstringval (void *p) {
   void *s = (void *) BOX (NULL);
 
+  __pre_gc();
+
   createStringBuf ();
   printValue (p);
 
   s = Bstring (stringBuf.contents);
   
   deleteStringBuf ();
+
+  __post_gc();
 
   return s;
 }
@@ -196,6 +210,8 @@ extern void* Barray (int n, ...) {
   int     i    = BOX(0),
           ai   = BOX(0);
   data    *r   = (data*) BOX (NULL);
+
+  __pre_gc();
 
   r = (data*) alloc (sizeof(int) * (n+1));
 
@@ -210,6 +226,8 @@ extern void* Barray (int n, ...) {
   
   va_end(args);
 
+  __post_gc();
+
   return r->contents;
 }
 
@@ -220,6 +238,8 @@ extern void* Bsexp (int n, ...) {
   size_t * p   = NULL;
   sexp   *r    = (sexp *) BOX (NULL);
   data   *d    = (data *) BOX (NULL);
+
+  __pre_gc();
 
   r = (sexp*) alloc (sizeof(int) * (n+1));
   d = &(r->contents);
@@ -239,6 +259,8 @@ extern void* Bsexp (int n, ...) {
   r->tag = va_arg(args, int);
   va_end(args);
 
+  __post_gc();
+
   return d->contents;
 }
 
@@ -249,7 +271,7 @@ extern int Btag (void *d, int t, int n) {
 }
 
 extern int Barray_patt (void *d, int n) {
-  data *r = BOX(NULL);
+  data *r = (data*) BOX(NULL);
   if (UNBOXED(d)) return BOX(0);
   else {
     r = TO_DATA(d);
@@ -342,6 +364,8 @@ extern void* Lstrcat (void *a, void *b) {
   strcpy (d->contents, da->contents);
   strcat (d->contents, db->contents);
 
+  __pre_gc();
+
   return d->contents;
 }
 
@@ -419,6 +443,19 @@ extern int Lwrite (int n) {
 /* rest a forward pointer instead of the object, scan object for pointers, call copying */
 /* for each found pointer. */
 
+// You also have to define two functions @__pre_gc and @__post_gc in runtime/gc_runtime.s.
+// These auxiliary functions have to be defined in oder to correctly set @__gc_stack_top.
+// Note that some of our functions (from runtime.c) activation records can be on top of the
+// program stack. These activation records contain usual values and thus we do not have a
+// way to distinguish pointers from non-pointers. And some of these values may accidentally be
+// equal to pointers into active semi-space but maybe not to the begin of an object.
+// Calling @gc_copy on such values leads to undefined behavior.
+// Thus, @__gc_stack_top has to point before these activation records. 
+// Note, you also have to find a correct place(-s) for @__pre_gc and @__post_gc to be called.
+// @__pre_gc  sets up @__gc_stack_top if it is not set yet
+// extern void __pre_gc  ();
+// @__post_gc sets @__gc_stack_top to zero if it was set by the caller
+// extern void __post_gc ();
 
 // The begin and the end of static area (are specified in src/X86.ml fucntion genasm)
 extern const size_t __gc_data_end, __gc_data_start;
@@ -430,20 +467,6 @@ extern void L__gc_init ();
 // @__gc_root_scan_stack (you have to define it in runtime/gc_runtime.s)
 //   finds roots in program stack and calls @gc_test_and_copy_root for each found root
 extern void __gc_root_scan_stack ();
-
-// You also have to define two functions @__pre_gc and @__post_gc in runtime/gc_runtime.s.
-// These auxiliary functions have to be defined in oder to correctly set @__gc_stack_top.
-// Note that some of our functions (from runtime.c) activation records can be on top of the
-// program stack. These activation records contain usual values and thus we do not have a
-// way to distinguish pointers from non-pointers. And some of these values may accidentally be
-// equal to pointers into active semi-space but maybe not to the begin of an object.
-// Calling @gc_copy on such values leads to undefined behavior.
-// Thus, @__gc_stack_top has to point before these activation records. 
-// Note, you also have to find a correct place(-s) for @__pre_gc and @__post_gc to be called.
-// @__pre_gc  sets up @__gc_stack_top if it is not set yet
-extern void __pre_gc  ();
-// @__post_gc sets @__gc_stack_top to zero if it was set by the caller
-extern void __post_gc ();
 
 /* memory semi-space */
 typedef struct {
@@ -484,19 +507,53 @@ extern size_t * gc_copy (size_t *obj);
 // @copy_elements
 //   1) copies @len words from @from to @where
 //   2) calls @gc_copy for those of these words which are valid pointers to from_space
-static void copy_elements (size_t *where, size_t *from, int len) { NIMPL }
+static void copy_elements (size_t *where, size_t *from, int len) {
+  
+}
 
 // @extend_spaces extends size of both from- and to- spaces
-static void extend_spaces (void) { NIMPL }
+static void extend_spaces (void) {
+  SPACE_SIZE = SPACE_SIZE << 1;
+  
+  void *r1 = mremap(from_space.begin, from_space.size, SPACE_SIZE, 0);
+  void *r2 = mremap(to_space.begin, to_space.size, SPACE_SIZE, 0);
+
+  if (r1 == MAP_FAILED || r2 == MAP_FAILED) {
+    fprintf(stderr, "ERROR: Error while extending pool\n");
+    exit(1);
+  }
+  
+  from_space.end = from_space.begin + SPACE_SIZE;
+  to_space.end   = to_space.begin   + SPACE_SIZE;
+  from_space.size = SPACE_SIZE;
+  to_space.size   = SPACE_SIZE;
+}
 
 // @gc_copy takes a pointer to an object, copies it
 //   (i.e. moves from from_space to to_space)
 //   , rests a forward pointer, and returns new object location.
 extern size_t * gc_copy (size_t *obj) {
-  
+  data *d = TO_DATA(obj);
+  switch (TAG(d->tag)) {      
+    case STRING_TAG:
+      fprintf(stderr, "DEBUG: String! Length: %zu\n", LEN(d->tag));
+      break;     
+    case ARRAY_TAG:
+      fprintf(stderr, "DEBUG: Array!  Length: %zu\n", LEN(d->tag));
+      break;
+    case SEXP_TAG:
+      fprintf(stderr, "DEBUG: Sexp!   Length: %zu\n", LEN(d->tag));
+      break;
+    default:
+      fprintf(stderr, "DEBUG: Invalid tag!\n");
+  }
 }
 
-extern void gc_print_stack_top_bottom (size_t **top, size_t **bottom) {
+extern void debug_print_value(size_t **v) {
+  fprintf(stderr, "DEBUG: Value %p\n", v);
+}
+
+extern void debug_print_stack_top_bottom (size_t **top, size_t **bottom) {
   fprintf(stderr, "DEBUG: Stack top:    %p\n", top);
   fprintf(stderr, "DEBUG: Stack bottom: %p\n", bottom);
 }
@@ -509,35 +566,40 @@ extern void gc_test_and_copy_root (size_t ** root) {
     fprintf(stderr, "DEBUG: Points in heap: %p\n", v);
     gc_copy(v);
   }
+  fprintf(stderr, "DEBUG: Test and copy root: %p\n", root);
 }
 
 // @gc_root_scan_data scans static area for root
 //   for each root it calls @gc_test_and_copy_root
-extern void gc_root_scan_data (void) { NIMPL }
+extern void gc_root_scan_data (void) {
+  size_t *p = &__gc_data_start;
+  while (p != &__gc_data_end) {
+    gc_test_and_copy_root((size_t**)p);
+    p++;
+  }
+}
 
 // @init_pool is a memory pools initialization function
 //   (is called by L__gc_init from runtime/gc_runtime.s)
 extern void init_pool (void) {
-  size_t *from_space_allocated = (size_t*)mmap(NULL, SPACE_SIZE, PROT_READ | PROT_WRITE,
-					       MAP_PRIVATE | MAP_32BIT | MAP_ANONYMOUS, -1, 0);
-  size_t *to_space_allocated   = (size_t*)mmap(NULL, SPACE_SIZE, PROT_READ | PROT_WRITE,
-					       MAP_PRIVATE | MAP_32BIT | MAP_ANONYMOUS, -1, 0);
-  if (from_space_allocated == MAP_FAILED || to_space_allocated == MAP_FAILED) {
+  from_space.begin = (size_t*)mmap(NULL, SPACE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
+				   MAP_PRIVATE | MAP_32BIT | MAP_ANONYMOUS, -1, 0);
+  to_space.begin   = (size_t*)mmap(NULL, SPACE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC,
+				   MAP_PRIVATE | MAP_32BIT | MAP_ANONYMOUS, -1, 0);
+  if (from_space.begin == MAP_FAILED || to_space.begin == MAP_FAILED) {
     fprintf(stderr, "ERROR: Error while allocating memory for pool\n");
     exit(1);
   }
 
   fprintf(stderr, "DEBUG: Successfully allocated pool...\n");
   
-  from_space.begin   = from_space_allocated;
-  from_space.end     = from_space_allocated + SPACE_SIZE;
-  from_space.current = from_space_allocated;
+  from_space.end     = from_space.begin + SPACE_SIZE;
+  from_space.current = from_space.begin;
   from_space.size    = SPACE_SIZE;
 
-  to_space.begin   = to_space_allocated;
-  to_space.end     = to_space_allocated + SPACE_SIZE;
-  to_space.current = to_space_allocated;
-  to_space.size    = SPACE_SIZE;
+  to_space.end       = to_space.begin + SPACE_SIZE;
+  to_space.current   = to_space.begin;
+  to_space.size      = SPACE_SIZE;
 
   fprintf(stderr, "DEBUG: From space range: [%p, %p]\n", from_space.begin, from_space.end);
 }
@@ -562,12 +624,11 @@ static int free_pool (pool * p) {
 //        and calls @gc_test_and_copy_root for each found root)
 //   3) extends spaces if there is not enough space to be allocated after gc
 static void * gc (size_t size) {
-  // gc_root_scan_data();
-  __pre_gc();
+  gc_root_scan_data();
   __gc_root_scan_stack();
-  fprintf(stderr, "Calling __post_gc()...\n");
-  __post_gc();
-  // extend spaces if needed...
+  fprintf(stderr, "DEBUG: Scanned roots...\n");
+  
+  NIMPL
 }
 
 // @alloc allocates @size memory words
@@ -575,8 +636,9 @@ static void * gc (size_t size) {
 //   i.e. calls @gc when @current + @size > @from_space.end
 // returns a pointer to the allocated block of size @size
 extern void * alloc (size_t size) {
+  void *p = (void*)BOX(NULL);
   if (from_space.current + size < from_space.end) {
-    void *p = (void*)from_space.current;
+    p = (void*)from_space.current;
     from_space.current += size;
     fprintf(stderr, "DEBUG: Allocate from %p %d words...\n", p, size);
     return p;
